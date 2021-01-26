@@ -1,0 +1,1163 @@
+---
+title: "16S rRNA V3V4 amplicon sequence analyses and qPCR analyses - AD staphylome project 2020/2021 "
+author: "Sofie Marie Edslev"
+output:
+  html_notebook:
+    theme: united
+    toc: yes
+---
+
+
+**NOTES**
+This script only comtains code for analyses that are included in the published paper
+
+
+# 1) prepare data
+
+```{r include=FALSE}
+library(rcompanion)
+library(phyloseq)
+library(ggplot2)
+library(vegan)
+library(dplyr)
+library(openxlsx)
+library(gridExtra)
+library(reshape2)
+library(ggdendro)
+library(factoextra)
+library(cluster)
+library(tidyr)
+library(ggResidpanel)
+library(lme4)
+library(lmerTest)
+library(modelbased)
+library(report)
+library(ANCOMBC)
+library(ggpubr)
+library(ggalluvial)
+library(car)
+library(metacoder)
+
+theme_set(theme_bw())
+mytheme<-theme(plot.title = element_text(family = "Helvetica", face = "bold", size = (10)),
+               axis.title = element_text(family = "Helvetica", size = (10)),
+               axis.text = element_text(family = "Helvetica", size = (8)),
+               legend.title = element_text(family = "Helvetica",face = "bold", size = (10)),
+               legend.text = element_text(family = "Helvetica", size = (8)),
+               legend.position="right",
+               strip.background =element_rect(fill="white"))
+
+color_ad<-c("#BCD9E9","#5D7582")
+color_sa<-c("#d3d1d4","#6b696c")
+color_skintypes<-c("#F3DFAC","#C49E3F","#7A5803")
+color_ad_skin_clusters<-c("#BCD9E9","#5D7582","#C49E3F","#7A5803")
+color_scorad<-c("#DCEED3","#8FAB80","#5E6A58")
+color_ac<-c("#BCD9E9","#5D7582","#DCEED3")
+color_group<-c("#5D7582","#C49E3F")
+color_heattree<-c("#EDD9A3","#BCD9E9","#5D7582")
+```
+
+**load data**
+```{r echo=FALSE}
+pskin<-readRDS("/PATH.RData")
+pskin
+```
+
+**glomerate at genus level**
+```{r echo=FALSE}
+pskin_genus<-tax_glom(pskin, "Genus")
+pskin_genus
+```
+
+**transformations**
+relative abbundance
+```{r include=FALSE}
+pskin_genus_percent<-transform_sample_counts(pskin_genus,function(x) x/sum(x)*100)
+```
+
+Hellinger transformation
+```{r include=FALSE}
+pskin_hellinger<-transform_sample_counts(pskin,function(x) sqrt(x / sum(x)))
+pskin_genus_hellinger<-transform_sample_counts(pskin_genus,function(x) sqrt(x / sum(x)))
+```
+
+**make sample subsets**
+```{r include=FALSE}
+### ASV level
+# AD samples only
+pskin_asv_AD<-subset_samples(pskin,group=="AD")
+pskin_asv_AD<-prune_taxa(taxa_sums(pskin_asv_AD) != 0, pskin_asv_AD)
+pskin_asv_AD_hellinger<-subset_samples(pskin_hellinger,group=="AD")
+pskin_asv_AD_hellinger<-prune_taxa(taxa_sums(pskin_asv_AD_hellinger) != 0, pskin_asv_AD_hellinger)
+
+#control samples only
+pskin_asv_control<-subset_samples(pskin,group=="Control")
+pskin_asv_control<-prune_taxa(taxa_sums(pskin_asv_control) != 0, pskin_asv_control)
+pskin_asv_control_hellinger<-subset_samples(pskin_hellinger,group=="Control")
+pskin_asv_control_hellinger<-prune_taxa(taxa_sums(pskin_asv_control_hellinger) != 0, pskin_asv_control_hellinger)
+
+# samples from athe albow crease
+pskin_asv_ac<-subset_samples(pskin,samplelocation=="antecubital_fossa")
+pskin_asv_ac<-prune_taxa(taxa_sums(pskin_asv_ac) != 0, pskin_asv_ac)
+pskin_asv_ac_hellinger<-subset_samples(pskin_hellinger,samplelocation=="antecubital_fossa")
+pskin_asv_ac_hellinger<-prune_taxa(taxa_sums(pskin_asv_ac_hellinger) != 0, pskin_asv_ac_hellinger)
+
+##genus level
+pskin_genus_AD<-subset_samples(pskin_genus,group=="AD")
+pskin_genus_AD<-prune_taxa(taxa_sums(pskin_genus_AD) != 0, pskin_genus_AD)
+pskin_genus_AD_percent<-subset_samples(pskin_genus_percent,group=="AD")
+pskin_genus_AD_percent<-prune_taxa(taxa_sums(pskin_genus_AD_percent) != 0, pskin_genus_AD_percent)
+pskin_genus_AD_hellinger<-subset_samples(pskin_genus_hellinger,group=="AD")
+pskin_genus_AD_hellinger<-prune_taxa(taxa_sums(pskin_genus_AD_hellinger) != 0, pskin_genus_AD_hellinger)
+
+pskin_genus_control<-subset_samples(pskin_genus,group=="Control")
+pskin_genus_control<-prune_taxa(taxa_sums(pskin_genus_control) != 0, pskin_genus_control)
+pskin_genus_control_percent<-subset_samples(pskin_genus_percent,group=="Control")
+pskin_genus_control_percent<-prune_taxa(taxa_sums(pskin_genus_control_percent) != 0, pskin_genus_control_percent)
+pskin_genus_control_hellinger<-subset_samples(pskin_genus_hellinger,group=="Control")
+pskin_genus_control_hellinger<-prune_taxa(taxa_sums(pskin_genus_control_hellinger) != 0, pskin_genus_control_hellinger)
+
+pskin_genus_ac<-subset_samples(pskin_genus,samplelocation=="antecubital_fossa")
+pskin_genus_ac<-prune_taxa(taxa_sums(pskin_genus_ac) != 0, pskin_genus_ac)
+pskin_genus_ac_percent<-subset_samples(pskin_genus_percent,samplelocation=="antecubital_fossa")
+pskin_genus_ac_percent<-prune_taxa(taxa_sums(pskin_genus_ac_percent) != 0, pskin_genus_ac_percent)
+pskin_genus_ac_hellinger<-subset_samples(pskin_genus_hellinger,samplelocation=="antecubital_fossa")
+pskin_genus_ac_hellinger<-prune_taxa(taxa_sums(pskin_genus_ac_hellinger) != 0, pskin_genus_ac_hellinger)
+```
+
+
+
+
+# 2) Heat tree analysis
+
+## AD samples only:
+
+**AD LS and NLS combined - Top 30 genera**
+Figure 2A
+```{r}
+#filtering: top30 genera included
+pskin_genus_AD_sub = prune_taxa(names(sort(taxa_sums(pskin_genus_AD),decreasing=TRUE)[1:30]), pskin_genus_AD)
+
+# remove the sample_variable "sample_id", so we dont have two duplicated variabels (as samplenames also are given in the rows)
+phylo_changed<-pskin_genus_AD_sub
+sample_data(phylo_changed)<-sample_data(phylo_changed)[,2:ncol(sample_data(phylo_changed))]
+
+# parse phyloobject
+mc_ad_fam<-parse_phyloseq(phylo_changed)
+
+## calculate taxa abundances (not only on family level!)
+
+# sum all reads in all samples per ASV: 
+mc_ad_fam$data$sum_abs_abd_all <- calc_group_stat(mc_ad_fam, "otu_table", sum, groups=mc_ad_fam$data$sample_data$group, other_cols=T)
+
+# Calculate per-taxon abundance (not equal to ASV abundance !!). Og så bruge i plottet: node_size = mc_ad_fam$data$tax_abd_all
+mc_ad_fam$data$tax_abd_all <- calc_taxon_abund(mc_ad_fam, "sum_abs_abd_all", cols = c("AD"))  
+
+## make into realtive aundaces (AD combined)
+
+# sum all reads in all samples per ASV: 
+mc_ad_fam$data$sum_abs_abd_all <- calc_group_stat(mc_ad_fam, "otu_table", sum, groups=mc_ad_fam$data$sample_data$group, other_cols=T)
+
+## Calculate relative abundance
+mc_ad_fam$data$rel_abd <- calc_obs_props(mc_ad_fam, "sum_abs_abd_all", other_cols=T)
+
+# Calculate per-taxon relative abundance (not equal to ASV abundance !!). 
+mc_ad_fam$data$tax_rel_abd_all <- calc_taxon_abund(mc_ad_fam, "rel_abd", cols = c("AD"))
+mc_ad_fam$data$tax_rel_abd_all$AD<-mc_ad_fam$data$tax_rel_abd_all$AD*100
+mc_ad_fam$data$tax_rel_abd_all$AD<-round(mc_ad_fam$data$tax_rel_abd_all$AD,digits=2)
+
+
+## subset taxa names for "high" abudant taxa
+
+# Relative abudances: subset of taxa with >0.5% relative abundance for labeling
+to_name_ids <- mc_ad_fam$data$tax_rel_abd$taxon_id[mc_ad_fam$data$tax_rel_abd_all$AD>0.5]
+to_name <- taxon_names(mc_ad_fam)[to_name_ids]
+
+
+## Plot where node size is equal to the relative abudances 
+set.seed(50)
+heat_tree(mc_ad_fam,
+          node_label = taxon_names,
+          node_label_size_range = c(0.015,0.035),                         
+          #node_label = ifelse(taxon_names %in% to_name, taxon_names,""),  
+          node_size =mc_ad_fam$data$tax_rel_abd_all$AD,   
+          node_color=mc_ad_fam$data$tax_rel_abd_all$AD,
+          node_color_range = c(color_heattree),
+          node_color_axis_label = "Relative \nabundance (%)",
+          #node_size_axis_label="Relative abundance (%)",
+          layout = "davidson-harel",
+          initial_layout = "reingold-tilford",
+          overlap_avoidance = 2,                                        
+          margin_size = c(0.08, 0.08, 0.08, 0.08))
+          #output_file = "./file_name.pdf")                            
+
+```
+
+
+##  Heat tree analysis - Control samples only:
+
+**Control skin - Top 30 genera**
+```{r}
+#filtering: include top 30 genera
+pskin_genus_C_sub = prune_taxa(names(sort(taxa_sums(pskin_genus_control),decreasing=TRUE)[1:30]), pskin_genus_control)
+# remove the sample_variable "sample_id", so we dont have two duplicated variabels (as samplenames also are given in the rows)
+phylo_changed<-pskin_genus_C_sub
+sample_data(phylo_changed)<-sample_data(phylo_changed)[,2:ncol(sample_data(phylo_changed))]
+
+# parse phyloobject
+mc_c_fam<-parse_phyloseq(phylo_changed)
+
+## calculate taxa abundances (not only on family level!)
+
+# sum all reads in all samples per ASV: 
+mc_c_fam$data$sum_abs_abd_all <- calc_group_stat(mc_c_fam, "otu_table", sum, groups=mc_c_fam$data$sample_data$group, other_cols=T)
+
+# Calculate per-taxon abundance (not equal to ASV abundance !!). Og så bruge i plottet: node_size = mc_ad_fam$data$tax_abd_all
+mc_c_fam$data$tax_abd_all <- calc_taxon_abund(mc_c_fam, "sum_abs_abd_all", cols = c("Control"))  
+
+## make into realtive aundaces (AD combined)
+
+# sum all reads in all samples per ASV: 
+mc_c_fam$data$sum_abs_abd_all <- calc_group_stat(mc_c_fam, "otu_table", sum, groups=mc_c_fam$data$sample_data$group, other_cols=T)
+
+## Calculate relative abundance
+mc_c_fam$data$rel_abd <- calc_obs_props(mc_c_fam, "sum_abs_abd_all", other_cols=T)
+
+# Calculate per-taxon relative abundance (not equal to ASV abundance !!). 
+mc_c_fam$data$tax_rel_abd_all <- calc_taxon_abund(mc_c_fam, "rel_abd", cols = c("Control"))
+mc_c_fam$data$tax_rel_abd_all$Control<-mc_c_fam$data$tax_rel_abd_all$Control*100
+mc_c_fam$data$tax_rel_abd_all$Control<-round(mc_c_fam$data$tax_rel_abd_all$Control,digits=2)
+
+## Plot where node size is equal to the relative abudances 
+set.seed(42)
+heat_tree(mc_c_fam,
+          node_label = taxon_names,
+          node_label_size_range = c(0.015,0.035),                          
+          node_size =mc_c_fam$data$tax_rel_abd_all$Control,   
+          node_color=mc_c_fam$data$tax_rel_abd_all$Control,
+          node_color_range = c(color_heattree),
+          node_color_axis_label = "Relative \nabundance (%)",
+          layout = "davidson-harel",
+          initial_layout = "reingold-tilford",
+          overlap_avoidance = 2,                                        
+          margin_size = c(0.08, 0.08, 0.08, 0.08))
+          #output_file = "./File_name.pdf")                            
+```
+
+# 2) Analysis of AD skin samples 
+
+## Analysis on skin types:
+
+### Beta-diversity
+Here LS and NLS are merged into one. Thus looking at all AD samples
+```{r eval=FALSE, fig.height=8, fig.width=8, include=FALSE}
+b_ord <- ordinate(pskin_genus_AD_hellinger, method = "PCoA", distance = "bray")
+
+ord_plot<-plot_ordination(pskin_genus_AD_hellinger,b_ord, axes=c(1,2),color="skin_types")+   
+  geom_point(size=2, alpha=0.05)+
+  stat_ellipse(level=0.75)+
+  scale_color_manual(values=c(color_skintypes))
+
+
+ord_plot2<-plot_ordination(pskin_genus_AD_hellinger,b_ord, axes=c(1,3),color="skin_types")+   
+  geom_point(size=2, alpha=0.05)+
+  stat_ellipse(level=0.75)+
+  scale_color_manual(values=c(color_skintypes))
+
+ord_plot3<-plot_ordination(pskin_genus_AD_hellinger,b_ord, axes=c(2,3),color="skin_types")+   
+  geom_point(size=2, alpha=0.05)+
+  stat_ellipse(level=0.75)+
+  scale_color_manual(values=c(color_skintypes))
+
+grid.arrange(ord_plot,ord_plot2,ord_plot3,nrow=2)
+
+#ggsave(plot=ord_plot,filename = "file_name.pdf",device = "pdf",width = 15,height = 15,units = "cm")
+```
+
+```{r echo=FALSE}
+a<-anosim(otu_table(pskin_genus_AD_hellinger),grouping =as.factor(sample_data(pskin_genus_AD_hellinger)$skin_types),distance = "bray",permutations=999)
+summary(a)
+plot(a)
+```
+
+
+### Differences in alpha diversity  
+Analysis is made on ASV level
+
+**prepare data**
+```{r include=FALSE}
+diversity<-estimate_richness(pskin_asv_AD,measures = c("Observed","Shannon"))
+diversity$sample_id<-row.names(diversity)
+
+meta_sub<-data.frame("sample_id"=sample_data(pskin_asv_AD)$sample_id, id=sample_data(pskin_asv_AD)$id, "samplesite"=sample_data(pskin_asv_AD)$samplesite,"skin_types"=sample_data(pskin_asv_AD)$skin_types)
+
+diversity<-merge(meta_sub,diversity,by="sample_id",all.x=TRUE)
+```
+
+
+**plot**
+```{r echo=FALSE}
+richness<-ggplot(diversity,aes(x=Observed,fill=skin_types))+
+  geom_density(alpha=0.25)
+
+shannon<-ggplot(diversity,aes(x=Shannon,fill=skin_types))+
+  geom_density(alpha=0.25)
+
+richness2<-ggplot(diversity,aes(y=Shannon,x=skin_types))+
+  geom_boxplot()
+
+shannon2<-ggplot(diversity,aes(y=Shannon,x=skin_types))+
+  geom_boxplot()
+
+grid.arrange(richness,shannon,richness2,shannon2,nrow=2)
+```
+
+
+**statistics**
+1) Mixed model, using ANOVA
+```{r echo=FALSE  }
+#equal variance between groups?
+leveneTest(Shannon ~ skin_types,data=diversity)   # Thus, p>0.05 --> no difference in variance.
+
+# Fit model taking variation in skin type and patient into account as random effects 
+fit <- lmer(Shannon ~ skin_types + samplesite + (1|id), data = diversity)
+summary(fit)
+confint(fit)
+
+#Test overall model significance (with anova)
+anova(fit)
+
+#test praiwice differences
+results <-modelbased::estimate_contrasts(model=fit,levels="skin_types")
+results$p_adjust<-p.adjust(results$p,method = "fdr")
+print(results)
+
+#test model assumtions:
+resid_panel(fit, plots = "all", qqbands = TRUE)
+```
+
+2) Nonparametric Mann-Whitney
+Only looking at differences between dry and moist.
+Need to look at LS and NLS seperately, as I cant control for the paired sampling otherwise
+```{r}
+diversity_ls<-filter(diversity,samplesite=="AD_LS")
+diversity_nls<-filter(diversity,samplesite=="AD_NLS")
+
+'ls'
+wilcox.test(diversity_ls$Shannon[diversity_ls$skin_types=="dry"],diversity_ls$Shannon[diversity_ls$skin_types=="moist"],paired=FALSE)
+
+'nls'
+wilcox.test(diversity_nls$Shannon[diversity_nls$skin_types=="dry"],diversity_nls$Shannon[diversity_nls$skin_types=="moist"],paired=FALSE)
+```
+
+
+
+
+## Difference in community compostion between LS and NLS? (Beta-diversity)
+Make on genus level. 
+Use hellinger tranformed counts
+
+**1) plot betadiversities**
+```{r echo=FALSE, fig.height=8, fig.width=8}
+b_ord <- ordinate(pskin_genus_AD_hellinger, method = "PCoA", distance = "bray")
+
+ord_plot<-plot_ordination(pskin_genus_AD_hellinger,b_ord, axes=c(1,2),color="samplesite")+   
+  geom_point(size=2, alpha=0.05)+
+  stat_ellipse(level=0.75)+
+  scale_color_manual(values=c(color_ad))
+
+ord_plot2<-plot_ordination(pskin_genus_AD_hellinger,b_ord, axes=c(1,3),color="samplesite")+   
+  geom_point(size=2, alpha=0.05)+
+  stat_ellipse(level=0.75)+
+  scale_color_manual(values=c(color_ad))
+
+ord_plot3<-plot_ordination(pskin_genus_AD_hellinger,b_ord, axes=c(2,3),color="samplesite")+   
+  geom_point(size=2, alpha=0.05)+
+  stat_ellipse(level=0.75)+
+  scale_color_manual(values=c(color_ad))
+
+grid.arrange(ord_plot,ord_plot2,ord_plot3,nrow=2)
+#ggsave(plot=ord_plot,filename = "File_name.pdf",device = "pdf",width = 15,height = 15,units = "cm")
+```
+
+**2) test statistics **
+using PERMANOVA, 
+here I include skin types
+```{r echo=TRUE}
+#analysis of homogeneity of group dispersions (check if variance within groups are the same)
+dist<-phyloseq::distance(pskin_genus_AD_hellinger, method = "bray")
+
+bd<-betadisper(dist,group=get_variable(pskin_genus_AD_hellinger,"samplesite"))
+bd
+anova(bd)
+```
+Thus, no diff --> assumptions is okay!
+
+```{r}
+aa<-adonis(formula=dist~samplesite,data=get_variable(pskin_genus_AD_hellinger),strata=get_variable(pskin_genus_AD_hellinger,"skin_types"),permuations=999)
+aa
+```
+
+
+## Differences in alpha diversity  between AD LS and AD NLS
+ASV level analysis
+**plot**
+Figure 2B
+```{r echo=FALSE}
+shannon<-ggplot(diversity,aes(y=Shannon,x=samplesite,fill=samplesite))+
+  geom_boxplot(width=0.6)+
+  scale_fill_manual(values = color_ad,name="Skin sites",labels=c("AD LS", "AD NLS"))+
+  geom_line(aes(x=samplesite,y=Shannon, group = id),color="grey",alpha=0.7) +
+  mytheme+
+  scale_x_discrete(breaks=c("AD_LS","AD_NLS"),labels=c("AD LS","AD NLS"))+
+  xlab("Skin sites")+
+  ylab("Bacterial diversity (Shannon index)")
+shannon
+#ggsave(plot=shannon,filename = "File_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+```
+
+**Summary tables**
+```{r}
+'LS'
+summary(diversity$Shannon[diversity$samplesite == "AD_LS"])
+'NLS'
+summary(diversity$Shannon[diversity$samplesite == "AD_NLS"])
+```
+
+
+
+**checK assumotion for parametric test**
+```{r}
+leveneTest(diversity$Shannon ~ diversity$samplesite)          # OK!
+densityplot(x=diversity$Shannon,group=diversity$samplesite)   
+# Normal distributions?
+shapiro.test(diversity$Shannon[diversity$samplesite=="AD_LS"])   # p<0.05 --> data is not normally distributed
+shapiro.test(diversity$Shannon[diversity$samplesite=="AD_NLS"])
+```
+--> not okay
+ 
+ 
+-->make non-parametric test:
+**non parametric test**
+```{r}
+'statistics - paired wilcoxon signed rank test forshannon'
+diversity_wide<- pivot_wider(id_cols="id",names_from="samplesite", values_from="Shannon",data=diversity)
+wilcox.test(diversity_wide$AD_LS,diversity_wide$AD_NLS,paired=TRUE)
+wilcox.test(diversity$Shannon ~ diversity$samplesite,paired=TRUE)  # same results --> as long as my data is ordered, then it can still be in a broad format
+
+#effect size:
+wilcoxonPairedR(diversity$Shannon,diversity$samplesite)
+```
+
+**Check if a mixed effect linaer model wols come to the same result as wilconxon**
+In this model I can  include skin types as fixed effect. ID is included as random effect.
+However, test assumotions is not okay, so this test is made mostly to see if a test including skin types as an effect will change the results drastically. 
+```{r echo=FALSE  }
+fit <- lmer(Shannon ~ samplesite + skin_types + (1|id), data = diversity)
+summary(fit)
+```
+
+```{r echo=FALSE}
+anova(fit)
+```
+
+```{r echo=FALSE,   fig.width=10}
+resid_panel(fit, plots = "all", qqbands = TRUE)
+```
+
+
+## ANCOM-BC - Differenatial abudance analysis. Differences between AD LS and AD NLS ?
+use untransformed counts!
+For LS - NLS comparisons: Skintypes included in model
+only include top 30 most abudant genera within AD skin (in order to reduce the total number of tests made)
+
+**prepare data**
+```{r eval=FALSE, include=FALSE}
+# select top 30 genera, and make a "dummy" taxa which contains summed counts for all removed taxa. Important so we dont change the total library size
+remove<-names(sort(taxa_sums(pskin_genus_AD),decreasing = TRUE)[31:length(taxa_sums(pskin_genus_AD))])
+pskin_genus_AD_reduced = merge_taxa(pskin_genus_AD,remove,archetype = "ASV3197")   #nb, archetype = the name of the merged ASV. need to be a name in the taxa table 
+
+# create phylo object where data is in the right format:
+otu<-as.matrix(otu_table(pskin_genus_AD_reduced))
+otu<-t(otu)
+OTU<-otu_table(otu,taxa_are_rows = TRUE)
+
+meta<-as.data.frame(sample_data(pskin_genus_AD_reduced))
+META<-sample_data(meta)
+
+taxa<-as.matrix(tax_table(pskin_genus_AD_reduced))
+TAXA<-tax_table(taxa)
+
+phylo<-phyloseq(OTU,META,TAXA)
+```
+
+**run**
+```{r}
+set.seed(42)
+anc<-ancombc(phyloseq = phylo,formula = "samplesite + skin_types", p_adj_method = "fdr",group = "samplesite", lib_cut=4000,zero_cut = 0.75,struc_zero = TRUE)
+```
+
+**initial look at output**
+```{r}
+length(anc$zero_ind)/2                                                          
+length(anc$res$q_val$samplesiteAD_NLS[anc$res$q_val$samplesiteAD_NLS<0.05])     
+
+res<-data.frame("asv"=rownames(anc$feature_table),"genus"=taxa[,6],"log_fold_change"=anc$res$beta$samplesiteAD_NLS,
+                "se"=anc$res$se$samplesiteAD_NLS,"p_val"=anc$res$p_val$samplesiteAD_NLS,"q_val"=anc$res$q_val$samplesiteAD_NLS)
+res
+
+res[res$q_val<0.05,]
+```
+
+
+
+
+
+# 3) Comparative analysis of AD skin and healthy control skin. 
+Only include samples collected at the albow crease
+
+number of included samples
+```{r}
+table(sample_data(pskin_genus_ac)$samplesite)
+```
+
+
+## beta-diversity analysis.
+genus level analysis
+Hellinger tranformed counts
+Bray curtis dissimilarity
+
+**1) Differences between LS, NLS and Control skin**
+```{r echo=FALSE, fig.height=8, fig.width=8}
+b_ord <- ordinate(pskin_genus_ac_hellinger, method = "PCoA", distance = "bray")
+
+ord_plot<-plot_ordination(pskin_genus_ac_hellinger,b_ord, axes=c(1,2),color="samplesite")+   
+  geom_point(size=2, alpha=0.05)+
+  stat_ellipse(level=0.75)+
+  scale_color_manual(values=c(color_ac))
+
+ord_plot2<-plot_ordination(pskin_genus_ac_hellinger,b_ord, axes=c(1,3),color="samplesite")+   
+  geom_point(size=2, alpha=0.05)+
+  stat_ellipse(level=0.75)+
+  scale_color_manual(values=c(color_ac))
+
+ord_plot3<-plot_ordination(pskin_genus_ac_hellinger,b_ord, axes=c(2,3),color="samplesite")+   
+  geom_point(size=2, alpha=0.05)+
+  stat_ellipse(level=0.75)+
+  scale_color_manual(values=c(color_ac))
+
+grid.arrange(ord_plot,ord_plot2,ord_plot3,nrow=2)
+
+#ggsave(plot=ord_plot,filename = "File_nake.pdf",device = "pdf",width = 15,height = 15,units = "cm")
+```
+
+
+permanova
+```{r echo=TRUE}
+#m analysis of homogeneity of group dispersions (check if variance within groups are the same)
+dist<-phyloseq::distance(pskin_genus_ac_hellinger, method = "bray")
+
+bd<-betadisper(dist,group=get_variable(pskin_genus_ac_hellinger,"samplesite"))
+bd
+anova(bd)
+```
+Thus, no diff --> assumptions is okay!
+
+```{r}
+aa<-adonis(formula=dist~samplesite,data=get_variable(pskin_genus_ac_hellinger),permuations=999)
+aa
+```
+
+
+
+**2) plot betadiversities  between groups (AD skin vs control skin)**
+- i.e. merging LS and NLS together (as we have shown that there is no significant difference beteen LS and NLS)
+```{r echo=FALSE, fig.height=8, fig.width=8}
+b_ord <- ordinate(pskin_genus_ac_hellinger, method = "PCoA", distance = "bray")
+
+ord_plot<-plot_ordination(pskin_genus_ac_hellinger,b_ord, axes=c(1,2),color="group")+   
+  geom_point(size=2, alpha=0.05)+
+  stat_ellipse(level=0.75)+
+  mytheme+
+  scale_color_manual(values=c(color_group),name="Skin sites",labels=c("AD skin","HC skin"))
+  
+ord_plot2<-plot_ordination(pskin_genus_ac_hellinger,b_ord, axes=c(1,3),color="group")+   
+  geom_point(size=2, alpha=0.05)+
+  stat_ellipse(level=0.75)+
+  scale_color_manual(values=c(color_group),name="Skin sites",labels=c("AD skin","HC skin"))
+
+ord_plot3<-plot_ordination(pskin_genus_ac_hellinger,b_ord, axes=c(2,3),color="group")+   
+  geom_point(size=2, alpha=0.05)+
+  stat_ellipse(level=0.75)+
+  scale_color_manual(values=c(color_group),name="Skin sites",labels=c("AD skin","HC skin"))
+
+grid.arrange(ord_plot,ord_plot2,ord_plot3,nrow=2)
+#ggsave(plot=ord_plot,filename = "file_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+```
+
+
+**permanova - AD vc Controls**
+```{r echo=TRUE}
+#analysis of homogeneity of group dispersions (check if variance within groups are the same)
+dist<-phyloseq::distance(pskin_genus_ac_hellinger, method = "bray")
+
+bd<-betadisper(dist,group=get_variable(pskin_genus_ac_hellinger,"group"))
+bd
+anova(bd)
+```
+Thus, no diff --> assumptions is okay!
+
+```{r}
+aa<-adonis(formula=dist~group,data=get_variable(pskin_genus_ac_hellinger),permuations=999)
+aa
+```
+
+
+## alpha diversity analysis
+
+**prepare diversity table**
+```{r include=FALSE}
+diversity<-estimate_richness(pskin_asv_ac,measures = c("Observed","Shannon"))
+diversity$sample_id<-row.names(diversity)
+
+meta_sub<-data.frame("sample_id"=sample_data(pskin_asv_ac)$sample_id, "id"=sample_data(pskin_asv_ac)$id, "samplesite"=sample_data(pskin_asv_ac)$samplesite,"group"=sample_data(pskin_asv_ac)$group)
+
+diversity<-merge(meta_sub,diversity,by="sample_id",all.x=TRUE)
+```
+
+**plot**
+Figure 2C
+```{r echo=FALSE}
+#make new variabel for shape plotting (samplesite)
+diversity$samplesite_points<- if_else(diversity$samplesite=="AD_LS","LS","NLS")
+diversity$samplesite_points<-factor(diversity$samplesite_points,levels=c("NLS","LS"))
+
+shannon<-ggplot(diversity,aes(y=Shannon,x=group,fill=group))+
+  geom_boxplot(width=0.6)+
+  geom_jitter(aes(y=Shannon,x=group,shape=samplesite_points),width = 0.15,size=1.5)+
+  mytheme+
+  scale_fill_manual(values = color_group,name="Skin sites",labels=c("AD skin", "HC skin"))+
+  scale_shape_discrete(name="")+
+  scale_x_discrete(breaks=c("AD","Control"),labels=c("AD skin","HC skin"))+
+  xlab("Skin sites")+
+  ylab("Bacterial diversity (Shannon index)")+
+  guides(fill=guide_legend(order=1),shape=guide_legend(order=2))
+shannon
+#ggsave(plot=shannon,filename = "file_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+```
+
+**Summary tables**
+```{r}
+'LS'
+summary(diversity$Shannon[diversity$samplesite == "AD_LS"])
+'NLS'
+summary(diversity$Shannon[diversity$samplesite == "AD_NLS"])
+'AD'
+summary(diversity$Shannon[diversity$group == "AD"])
+'Control'
+summary(diversity$Shannon[diversity$group == "Control"])
+```
+
+**non parametric wilcoxon signed rank test**
+```{r}
+'statistics - unpaired wilcoxon signed rank test for shannon'
+wilcox.test(diversity$Shannon ~ diversity$group,paired=FALSE)
+
+# effectsize:
+wilcoxonR(diversity$Shannon,diversity$group)
+```
+
+
+
+# ANCOM-BC - Differential abudannce analysis: Differences between AD skin and Control skin ?
+nb, use untransformed counts!
+only include top 30 most abudant genera within the antecubital crease skin samples (in order to reduce the total number of tests made)
+Here I merge AD LS and AD NLS into AD skin (no pareid samples within this group)
+
+
+
+**prepare data**
+```{r eval=FALSE, include=FALSE}
+# select top 30 genera, and make a "dummy" taxa which contains summed counts for all removed taxa. Important so we dont change the total library size
+remove<-names(sort(taxa_sums(pskin_genus_ac),decreasing = TRUE)[31:length(taxa_sums(pskin_genus_ac))])
+pskin_genus_ac_reduced = merge_taxa(pskin_genus_ac,remove,archetype = "ASV16570")   
+
+# create phylo object where data is in the right format:
+otu<-as.matrix(otu_table(pskin_genus_ac_reduced))
+otu<-t(otu)
+OTU<-otu_table(otu,taxa_are_rows = TRUE)
+
+meta<-as.data.frame(sample_data(pskin_genus_ac_reduced))
+meta$group<-factor(meta$group,levels=c("Control","AD"))      # change, so control = reference
+META<-sample_data(meta)
+
+taxa<-as.matrix(tax_table(pskin_genus_ac_reduced))
+TAXA<-tax_table(taxa)
+
+phylo<-phyloseq(OTU,META,TAXA)
+```
+
+**run**
+```{r}
+set.seed(42)
+anc<-ancombc(phyloseq = phylo,formula = "group", p_adj_method = "fdr",group = "group", lib_cut=4000,zero_cut = 0.75,struc_zero = TRUE)
+```
+
+**initial look at output**
+```{r}
+length(anc$zero_ind)/2                                                
+length(anc$res$q_val$groupAD[anc$res$q_val$groupAD<0.05])             
+
+res<-data.frame("asv"=rownames(anc$feature_table),"log_fold_change"=anc$res$beta$groupAD,
+                "se"=anc$res$se$groupAD,"p_val"=anc$res$p_val$groupAD,"q_val"=anc$res$q_val$groupAD)
+taxa<-data.frame(asv=row.names(taxa),genus=data.frame(taxa[,6]))
+res<-merge(x=res,y=taxa,by="asv",all.x = TRUE)
+
+res[res$p_val<0.05,]
+```
+
+**plot**
+```{r}
+# prepare df
+res$ci_low<-res$log_fold_change-(1.96*res$se)
+res$ci_up<-res$log_fold_change+(1.96*res$se)
+res$star<-ifelse(res$q_val<.001, "***",ifelse(res$q_val<.01, "**", ifelse(res$q_val<.05, "*", "")))
+res$type<-factor(c("Control skin - AD skin"))
+
+dat.fig.reduced<-res %>% filter(q_val<0.05)
+dat.fig.reduced$Genus=factor(dat.fig.reduced$Genus, levels = sort((dat.fig.reduced$Genus)))
+
+#plot
+p1=ggplot(dat.fig.reduced, aes(x=Genus, y=log_fold_change, ymin=ci_low, ymax=ci_up)) + 
+  geom_bar(aes(), stat="identity", width=0.4, position=position_dodge(),fill="#8494b3",color="#8494b3")+
+  geom_errorbar(width=0.2, size=0.25, position=position_dodge(width = 0.4))+
+  geom_abline(slope = 0, intercept = 0, linetype="dashed", alpha=0.5)+
+  labs(x=NULL, y="Log fold change")+coord_flip()+
+  scale_fill_discrete(name=NULL)+
+  scale_x_discrete(limits = rev(levels(dat.fig.reduced$Genus)))+
+  facet_grid(.~type, scales = "free_x")+
+  mytheme+
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.background = element_rect(fill="white"))+
+  geom_text(aes(y=log_fold_change+4*sign(log_fold_change), label=star), 
+            vjust=.7, color="black", position=position_dodge(width = .5))
+p1
+#ggsave(plot=p1,filename = "file_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+```
+
+
+**plot abudnances of those genera find to e significantly differential abudannt in the two groups**
+```{r}
+#1) relative abudnance
+phylo2<-transform_sample_counts(phylo,function(x) x/sum(x)*100)
+df<-psmelt(phylo2)
+asv_sign<-dat.fig.reduced$asv
+df<-filter(df,OTU %in% asv_sign)
+
+g<-ggplot(df,aes(x=group,y=Abundance))+
+  geom_boxplot(width=0.6)+
+  facet_grid(. ~Genus, scales = "free_x")+
+  ylab("Relative abundance (%)")+
+  mytheme+
+  theme(strip.background = element_rect(fill="white"))
+g
+#ggsave(plot=g,filename = "file_name.pdf",device = "pdf",width = 15,height = 10,units = "cm")
+
+# 2 presence/absence
+df$presence<-if_else(df$Abundance>0,1,0)
+
+g2<-ggplot(df, aes(x=group, y=presence))+
+  geom_bar(aes(),stat="identity",position="stack")+
+  facet_grid(. ~Genus, scales = "free_x")+
+  ylab("Presence")+
+  mytheme+
+  theme(strip.background = element_rect(fill="white"))
+g2
+#ggsave(plot=g2,filename = "file_name.pdf",device = "pdf",width = 15,height = 10,units = "cm")
+```
+
+
+# 4) Analyses om absolute abudannce (qPCR data)
+
+**prepare data**
+I.e. divide by 2, as the value in the phyloseq object is "16S rRNA gen copies within 2 µl DNA" --> thus change to "within 1 µl DNA eluate"
+```{r}
+sample_data(pskin)$bacteria_quantity <-as.numeric(sample_data(pskin)$bacteria_quantity/2)
+sample_data(pskin_genus_percent)$bacteria_quantity <-as.numeric(sample_data(pskin_genus_percent)$bacteria_quantity/2)
+sample_data(pskin_genus_AD_percent)$bacteria_quantity <-as.numeric(sample_data(pskin_genus_AD_percent)$bacteria_quantity/2)
+sample_data(pskin_genus_ac_percent)$bacteria_quantity <-as.numeric(sample_data(pskin_genus_ac_percent)$bacteria_quantity/2)
+```
+
+
+## Differences between LS and NLS
+
+**1) prepare data**
+```{r echo=FALSE}
+meta_ad<-data.frame(sample_data(pskin)[sample_data(pskin)$group=="AD"])
+meta_ad$bacterial_abundance_log10<-log10(meta_ad$bacteria_quantity)
+```
+
+**2) make plots (boxplots)**
+Figure 2D
+
+use log10 transformation
+```{r}
+#log10: include pairing
+g<-ggplot(meta_ad,aes(x=samplesite,y=bacterial_abundance_log10,fill=samplesite))+
+  geom_boxplot(width=0.6)+
+  geom_line(aes(x=samplesite,y=bacterial_abundance_log10, group = id),color="grey",alpha=0.7) +
+  scale_fill_manual(values = color_ad,name="Skin sites",labels=c("AD LS", "AD NLS"))+
+  mytheme+
+  scale_x_discrete(breaks=c("AD_LS","AD_NLS"),labels=c("AD LS","AD NLS"))+
+  xlab("Skin sites")+
+  ylab("16SrRNA gene copies in 1 µl DNA (log10)")
+g
+#ggsave(g,file="file_name0.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+```
+
+**2b) make plots (density plots)**
+```{r}
+ggplot(meta_ad,aes(x=bacterial_abundance_log10,fill=samplesite))+
+  geom_density(alpha=0.6)+
+  mytheme+
+  scale_fill_manual(values=c(color_ad))+
+  xlab("16S gene copies (log10)")
+```
+
+
+**3) summarys statistics, using the log10 tranformation**
+```{r echo=FALSE}
+'ls'
+summary(meta_ad$bacterial_abundance_log10[meta_ad$samplesite=="AD_LS"])
+'nls'
+summary(meta_ad$bacterial_abundance_log10[meta_ad$samplesite=="AD_NLS"])
+```
+
+
+**3.b) summary statistics using the untransformed values:**
+```{r echo=FALSE}
+'ls'
+summary(meta_ad$bacteria_quantity[meta_ad$samplesite=="AD_LS"])
+'nls'
+summary(meta_ad$bacteria_quantity[meta_ad$samplesite=="AD_NLS"])
+```
+
+
+**4) statistics**
+Non parametric test
+```{r echo=FALSE}
+#make df with paired structure
+meta_ad_wide_log10<- pivot_wider(id_cols="id",names_from="samplesite", values_from="bacterial_abundance_log10",data=meta_ad)
+
+'non parametric (wilcoxon signed rank test)'
+wilcox.test(meta_ad_wide_log10$AD_LS,meta_ad_wide_log10$AD_NLS,paired=TRUE)
+
+wilcoxonPairedR(meta_ad$bacterial_abundance_log10,meta_ad$samplesite)
+```
+ 
+
+check model assumotion for parametric test:
+```{r}
+leveneTest(bacterial_abundance_log10 ~ samplesite,data=meta_ad)  #no difference in variance!
+
+shapiro.test(meta_ad$bacterial_abundance_log10[meta_ad$samplesite=="AD_LS"])  # p< 0.05
+shapiro.test(meta_ad$bacterial_abundance_log10[meta_ad$samplesite=="AD_NLS"]) # p>0.5.
+```
+--> not okay!
+
+... however, lets try to make an mixed effect linear model, where skin types is nlcued as a fixed effect. and id included as random effect.
+Check if inclusion of skin types as an effect will change the test results significantly
+```{r}
+fit<-lmer(bacterial_abundance_log10 ~ samplesite + skin_types +(1|id),data=meta_ad)
+summary(fit)
+confint(fit)
+```
+
+```{r}
+anova(fit)  
+results <-estimate_contrasts(fit, "skin_types")
+print(results)
+```
+
+```{r}
+results <-estimate_contrasts(fit, "samplesite")
+print(results)
+```
+
+```{r}
+resid_panel(fit, plots = "all", qqbands = TRUE)
+```
+
+
+
+## Differences beyween AD skin and control skin
+only looking at Ac samples
+
+**1) prepare data**
+```{r echo=FALSE}
+meta_ac<-data.frame(sample_data(pskin)[sample_data(pskin)$samplelocation=="antecubital_fossa"])
+meta_ac$bacterial_abundance_log2<-log2(meta_ac$bacteria_quantity)
+meta_ac$bacterial_abundance_log10<-log10(meta_ac$bacteria_quantity)
+```
+
+**2) make plots**
+Figure 2E
+```{r}
+#log10: 
+#make new variabel for shape plotting (samplesite)
+meta_ac$samplesite_points<- if_else(meta_ac$samplesite=="AD_LS","LS","NLS")
+meta_ac$samplesite_points<-factor(meta_ac$samplesite_points,levels=c("NLS","LS"))
+
+#boxplot
+g<-ggplot(meta_ac,aes(x=group,y=bacterial_abundance_log10,fill=group))+
+  geom_boxplot(width=0.6,outlier.shape = NA)+
+  geom_jitter(aes(y=bacterial_abundance_log10,x=group,shape=samplesite_points),width = 0.1)+
+  mytheme+
+  scale_fill_manual(values = color_group,name="Skin sites",labels=c("AD skin", "HC skin"))+
+  scale_shape_discrete(name="")+
+  scale_x_discrete(breaks=c("AD","Control"),labels=c("AD skin","HC skin"))+
+  xlab("Skin sites")+
+  ylab("16SrRNA gene copies in 1µl DNA (log10)")+
+  guides(fill=guide_legend(order=1),shape=guide_legend(order=2))
+g
+#ggsave(g,file="file_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+
+#density plot
+ggplot(meta_ac,aes(x=bacterial_abundance_log10,fill=group))+
+  geom_density(alpha=0.7)+
+  mytheme+
+  scale_fill_manual(values=c(color_group))+
+  xlab("16SrRNA gene copies in 1µl DNA (log10)")
+```
+
+**summary statistics:**
+```{r echo=FALSE}
+'control skin'
+summary(meta_ac$bacteria_quantity[meta_ac$group=="Control"])
+
+'AD skin'
+summary(meta_ac$bacteria_quantity[meta_ac$group=="AD"])
+
+'AD ls'
+summary(meta_ac$bacteria_quantity[meta_ac$samplesite=="AD_LS"])
+
+'AD nls'
+summary(meta_ac$bacteria_quantity[meta_ac$samplesite=="AD_NLS"])
+
+'median fold change'
+median_df<-meta_ac %>% group_by(group) %>% summarise(median_abun=median(bacteria_quantity))
+median_df$median_abun[median_df$group=="AD"]/median_df$median_abun[median_df$group=="Control"]
+```
+
+**test differences between AD skin and control skin:**
+Use non-parametric test
+```{r echo=FALSE}
+'non-parametric Mann whitney U test'
+wilcox.test(meta_ac$bacterial_abundance_log10 ~ meta_ac$group,paired=FALSE)
+wilcox.test(meta_ac$bacteria_quantity ~ meta_ac$group,paired=FALSE)
+
+wilcoxonR(meta_ac$bacterial_abundance_log10,meta_ac$group)
+```
+
+Difference between LS and NLS for the AC samples?
+```{r}
+wilcox.test(meta_ac$bacterial_abundance_log10[meta_ac$group=="AD"] ~ meta_ac$samplesite[meta_ac$group=="AD"],paired=FALSE)
+```
+No!
+
+
+
+
+## Differences between skin types? 
+looking only at AD samples here, as all controls were collected at one site only
+
+**plot**
+Boxplots
+```{r}
+ggplot(meta_ad,aes(x=samplesite,y=bacterial_abundance_log10))+
+  geom_boxplot()+
+  geom_jitter(aes(x=samplesite,y=bacterial_abundance_log10,color=skin_types))+
+  mytheme+
+  scale_color_manual(values=c(color_skintypes))+
+  ylab("16S gene copies (log10)")
+
+g<-ggplot(meta_ad,aes(x=skin_types,y=bacterial_abundance_log10))+
+  geom_boxplot(width=0.3,outlier.shape = NA)+
+  geom_jitter(aes(x=skin_types,y=bacterial_abundance_log10,color=samplesite),alpha=0.7,size=1.5,width = 0.1)+
+  mytheme+
+  scale_color_manual(values=c(color_ad))+
+  ylab("16SrNA gene copies in 1 µl DNA (log10)")
+g
+#ggsave(g,file="file_name.pdf",device = "pdf",width = 15,height = 15,units = "cm")
+
+#ls only:
+meta_ls<-meta_ad %>% filter(samplesite=="AD_LS")
+
+ggplot(meta_ls,aes(x=skin_types,y=bacterial_abundance_log10))+
+  geom_boxplot()+
+  mytheme+
+  ylab("16S gene copies (log10)")
+
+#nls only:
+meta_nls<-meta_ad %>% filter(samplesite=="AD_NLS")
+
+ggplot(meta_nls,aes(x=skin_types,y=bacterial_abundance_log10))+
+  geom_boxplot()+
+  mytheme+
+  ylab("16S gene copies (log10)")
+```
+
+density plots:
+```{r}
+#AD skin combined
+ggplot(meta_ad,aes(x=bacterial_abundance_log10,fill=skin_types))+
+  geom_density(alpha=0.7)+
+  mytheme+
+  scale_fill_manual(values=c(color_skintypes))+
+  xlab("16S gene copies (log10)")
+
+#NLS
+ggplot(meta_nls,aes(x=bacterial_abundance_log10,fill=skin_types))+
+  geom_density(alpha=0.7)+
+  mytheme+
+  scale_fill_manual(values=c(color_skintypes))+
+  xlab("16S gene copies (log10)")
+```
+
+**statistics**
+test if there is a significant difference between dry and moist skin!
+```{r}
+'all ad skin samples'
+wilcox.test(meta_ad$bacterial_abundance_log10[meta_ad$skin_types=="dry"],meta_ad$bacterial_abundance_log10[meta_ad$skin_types=="moist"])
+
+'ad ls'
+wilcox.test(meta_ls$bacterial_abundance_log10[meta_ls$skin_types=="dry"],meta_ls$bacterial_abundance_log10[meta_ls$skin_types=="moist"])
+
+'ad nls'
+wilcox.test(meta_nls$bacterial_abundance_log10[meta_nls$skin_types=="dry"],meta_nls$bacterial_abundance_log10[meta_nls$skin_types=="moist"])
+```
+
+
+
+
+## Staphylococcus total abudance 
+Combine 16S rRAN qPCR absolute abudance data with the proportioanl abudannce of Staphylococcus (amplicon data)
+
+### Difference in absolut abundance of Staphylococus genus between LS and NLS?
+
+**prepare data**
+```{r}
+pskin_genus_AD_percent_staph<-subset_taxa(pskin_genus_AD_percent,Genus=="Staphylococcus")
+df_ad_staph<-psmelt(pskin_genus_AD_percent_staph)
+
+# calculate an estimated abosulte abundace based on the proportional abudnance and the qPCR results.
+df_ad_staph$Abundance2<-df_ad_staph$Abundance/100
+df_ad_staph$est_absolut_abundance<-df_ad_staph$Abundance2*df_ad_staph$bacteria_quantity
+df_ad_staph$est_absolut_abundance_log10<-log10(df_ad_staph$est_absolut_abundance)
+```
+
+**plot**
+Figure 2F and 2H
+```{r}
+a<-ggplot(df_ad_staph,aes(x=samplesite,y=Abundance,fill=samplesite))+
+  geom_boxplot(width=0.6)+
+  geom_line(aes(x=samplesite,y=Abundance,group=id),color="grey",alpha=0.7)+
+  mytheme+
+  scale_x_discrete(breaks=c("AD_LS","AD_NLS"),labels=c("AD LS","AD NLS"))+
+  scale_fill_manual(values = color_ad,name="Skin sites",labels=c("AD LS", "AD NLS"))+
+  xlab("Skin sites")+
+  ylab("Relative abundance \nof Staphylococcus (%)")
+
+b<-ggplot(df_ad_staph,aes(x=samplesite,y=est_absolut_abundance_log10,fill=samplesite))+
+  geom_boxplot(width=0.6)+
+  geom_line(aes(x=samplesite,y=est_absolut_abundance_log10,group=id),color="grey",alpha=0.7)+
+  mytheme+
+  mytheme+
+  scale_x_discrete(breaks=c("AD_LS","AD_NLS"),labels=c("AD LS","AD NLS"))+
+  scale_fill_manual(values = color_ad,name="Skin sites",labels=c("AD LS", "AD NLS"))+
+  xlab("Skin sites")+
+  ylab("Estimated absolut abundance \nof Staphylococcus (log10)")
+c<-cowplot::plot_grid(a, b, ncol = 1, align = "v",axis = "lr",rel_heights = c(1,1)) 
+c
+#ggsave(a,file="File_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+#ggsave(b,file="File_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+```
+
+**stats**
+paired wilcoxon
+```{r}
+'proportional abudances'
+df_ad_staph_wide<-pivot_wider(df_ad_staph,id_cols = "id",names_from = "samplesite",values_from = "Abundance")
+wilcox.test(df_ad_staph_wide$AD_LS,df_ad_staph_wide$AD_NLS,paired=TRUE)
+
+'absolut abundances'
+df_ad_staph_wide<-pivot_wider(df_ad_staph,id_cols = "id",names_from = "samplesite",values_from = "est_absolut_abundance_log10")
+wilcox.test(df_ad_staph_wide$AD_LS,df_ad_staph_wide$AD_NLS,paired=TRUE)
+
+wilcoxonPairedR(df_ad_staph$est_absolut_abundance_log10,df_ad_staph$samplesite)
+```
+
+
+### Difference in absolut abundance of Staphylococus genus between AD and controls?
+
+**prepare data**
+```{r}
+pskin_genus_ac_percent_staph<-subset_taxa(pskin_genus_ac_percent,Genus=="Staphylococcus")
+df_ac_staph<-psmelt(pskin_genus_ac_percent_staph)
+
+# calculate an estimated abosulte abundace based on the proportional abudnance and the qPCR results.
+df_ac_staph$Abundance2<-df_ac_staph$Abundance/100
+df_ac_staph$est_absolut_abundance<-df_ac_staph$Abundance2*df_ac_staph$bacteria_quantity
+df_ac_staph$est_absolut_abundance_log10<-log10(df_ac_staph$est_absolut_abundance)
+```
+
+**plot**
+Figure 2G and 2I
+```{r}
+df_ac_staph$samplesite_points<- if_else(df_ac_staph$samplesite=="AD_LS","LS","NLS")
+df_ac_staph$samplesite_points<-factor(df_ac_staph$samplesite_points,levels=c("NLS","LS"))
+
+a2<-ggplot(df_ac_staph,aes(x=group,y=Abundance,fill=group))+
+  geom_boxplot(width=0.6)+
+  geom_jitter(aes(y=Abundance,x=group,shape=samplesite_points),width = 0.1)+
+  mytheme+
+  scale_fill_manual(values = color_group,name="Skin sites",labels=c("AD skin", "HC skin"))+
+  scale_shape_discrete(name="")+
+  scale_x_discrete(breaks=c("AD","Control"),labels=c("AD skin","HC skin"))+
+    guides(fill=guide_legend(order=1),shape=guide_legend(order=2))+
+  xlab("Skin sites")+
+  ylab("Relative abundance \nof Staphylococcus (%)")
+a2
+b2<-ggplot(df_ac_staph,aes(x=group,y=est_absolut_abundance_log10,fill=group))+
+  geom_boxplot(width=0.6)+
+  geom_jitter(aes(y=est_absolut_abundance_log10,x=group,shape=samplesite_points),width = 0.1)+
+  mytheme+
+  scale_fill_manual(values = color_group,name="Skin sites",labels=c("AD skin", "HC skin"))+
+  scale_shape_discrete(name="")+
+  scale_x_discrete(breaks=c("AD","Control"),labels=c("AD skin","HC skin"))+
+  guides(fill=guide_legend(order=1),shape=guide_legend(order=2))+
+  xlab("Skin sites")+
+  ylab("Estimated absolut abundance \nof Staphylococcus (log10)")
+b2
+#ggsave(a2,file="File_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+#ggsave(b2,file="File_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+```
+
+**stats**
+un-paired wilcoxon (mann whitney U)
+```{r}
+'proportional abudances'
+wilcox.test(df_ac_staph$Abundance ~ df_ac_staph$group, paired=FALSE)
+
+'absolut abundances'
+wilcox.test(df_ac_staph$est_absolut_abundance_log10~ df_ac_staph$group, paired=FALSE)
+wilcoxonR(df_ac_staph$est_absolut_abundance_log10,df_ac_staph$group)
+```
+
+**median fold difference:**
+```{r}
+median_df<-df_ac_staph %>% group_by(group) %>% summarise(median_abun=median(est_absolut_abundance))
+median_df$median_abun[median_df$group=="AD"]/median_df$median_abun[median_df$group=="Control"]
+```
+

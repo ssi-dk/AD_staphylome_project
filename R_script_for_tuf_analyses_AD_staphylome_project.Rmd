@@ -1,0 +1,2592 @@
+
+---
+title: "tuf amplicon sequence analyses - AD staphylome project 2020/2021 "
+author: "Sofie Marie Edslev"
+output:
+  html_notebook:
+    theme: united
+    toc: yes
+---
+
+**NOTES**
+This script only comtains code for analyses that are included in the published paper
+
+
+# 1) Load packages and prepare data
+
+```{r include=FALSE}
+library(phyloseq)
+library(ggplot2)
+library(vegan)
+library(dplyr)
+library(openxlsx)
+library(gridExtra)
+library(reshape2)
+library(ggdendro)
+library(factoextra)
+library(cluster)
+library(tidyr)
+library(ggResidpanel)
+library(lme4)
+library(lmerTest)
+library(FSA)
+library(MCMCglmm)
+library(modelbased)
+library(report)
+library(ANCOMBC)
+library(ggpubr)
+library(ggalluvial )
+library(car)  
+library(ape)
+library(phangorn)
+library(parallel)
+
+
+# for ggplot graphics
+theme_set(theme_bw())
+mytheme<-theme(plot.title = element_text(family = "Helvetica", face = "bold", size = (10)),
+               axis.title = element_text(family = "Helvetica", size = (10)),
+               axis.text = element_text(family = "Helvetica", size = (8)),
+               legend.title = element_text(family = "Helvetica",face = "bold", size = (10)),
+               legend.text = element_text(family = "Helvetica", size = (8)),
+               legend.position="right",
+               strip.background =element_rect(fill="white"))
+
+color_metro<-c("#f0efef","#BCD9E9","#5D7582","#C49E3F","#bf4913","#92b88d","#4a7d5f","#c6a4a6","#F3DFAC","#f5a078","#81300b")
+color_ad<-c("#BCD9E9","#5D7582")
+color_sa<-c("#d3d1d4","#6b696c")
+color_skintypes<-c("#F3DFAC","#C49E3F","#7A5803")
+color_ad_skin_clusters<-c("#BCD9E9","#5D7582","#C49E3F","#7A5803")
+color_scorad<-c("#DCEED3","#8FAB80","#5E6A58")
+color_scorad2<-c("#F3DFAC","#f5a078","#81300b")
+color_scorad3<-c("#d1a9b4","#9e5266","#690822")
+color_ac<-c("#BCD9E9","#5D7582","#C49E3F")
+color_group<-c("#5D7582","#C49E3F")
+color_group2<-c("#5D7582","#BCD9E9","#C49E3F","#7A5803")
+```
+
+## 16S rRNA data
+
+**load data**
+```{r}
+pskin_16S<-readRDS("/PATH.RData")
+pskin_16S
+```
+
+** identify the relative proportions of Staphylococcos **
+```{r}
+#total counts in samples
+samplesums<-data.frame(sample_sums(pskin_16S))
+names(samplesums)<-c("Total_bacteria_counts")
+samplesums$sample_id<-row.names(samplesums)
+
+# Staph spp counts in samples
+pskin_16S_staph<-subset_taxa(pskin_16S,Genus=="Staphylococcus")
+samplesums2<-data.frame(sample_sums(pskin_16S_staph))
+names(samplesums2)<-c("Staph_counts")
+samplesums2$sample_id<-row.names(samplesums2)
+
+# calculate staph proportions...
+Samplesums<-merge(samplesums,samplesums2,by="sample_id")
+Samplesums$Staph_proportion<-Samplesums$Staph_counts/Samplesums$Total_bacteria_counts
+
+# make as variable in sampledata
+sampledata_df_16S<-data.frame(sample_data(pskin_16S))
+sampledata_df_16S<-merge(sampledata_df_16S,Samplesums,by="sample_id")
+row.names(sampledata_df_16S)<-sampledata_df_16S$sample_id
+sample_data(pskin_16S)<-sampledata_df_16S
+```
+
+**make samplessubsets, i.e. AD and healthy controls samples**
+```{r}
+pskin_16S_AD<-subset_samples(pskin_16S,group=="AD")
+pskin_16S_AD<-prune_taxa(taxa_sums(pskin_16S_AD) != 0, pskin_16S_AD)
+
+pskin_16S_control<-subset_samples(pskin_16S,group=="Control")
+pskin_16S_control<-prune_taxa(taxa_sums(pskin_16S_control) != 0, pskin_16S_control)
+```
+
+
+## tuf data:
+
+**load data**
+```{r echo=FALSE}
+pskin<-readRDS("/PATH.RData")
+pskin
+```
+
+**insert variabel in sampeldata for staph genera relative abundace**
+```{r}
+tuf_sampledata_df<-data.frame(sample_data(pskin))
+tuf_sampledata_df<-merge(tuf_sampledata_df,Samplesums[,c(1,4)],by="sample_id")
+row.names(tuf_sampledata_df)<-tuf_sampledata_df$sample_id
+sample_data(pskin)<-tuf_sampledata_df
+```
+
+
+**make transformation on ASV level phyloobject**
+i.e. hellinger tranformation, and percentage
+```{r include=FALSE}
+pskin_asv_hellinger<-transform_sample_counts(pskin,function(x) sqrt(x / sum(x)))
+pskin_asv_percent<-transform_sample_counts(pskin,function(x) x/sum(x)*100)
+```
+
+**Glomerate ASV phylobejct at Species level**
+```{r include=FALSE}
+pskin_spp<-tax_glom(pskin, "Genus_Species")
+pskin_spp
+```
+
+**make sample subsets**
+```{r include=FALSE}
+#spp level analysis on AD skin samples. untransforemd counts
+pskin_spp_AD<-subset_samples(pskin_spp,group=="AD")
+pskin_spp_AD<-prune_taxa(taxa_sums(pskin_spp_AD) != 0, pskin_spp_AD)
+
+#asv level analysis on AD skin samples, untransforemd counts
+pskin_asv_AD<-subset_samples(pskin,group=="AD")
+pskin_asv_AD<-prune_taxa(taxa_sums(pskin_asv_AD) != 0, pskin_asv_AD)
+
+#asv level analysis on AD skin samples, hellinger transforemd counts
+pskin_asv_AD_hellinger<-subset_samples(pskin_asv_hellinger,group=="AD")
+pskin_asv_AD_hellinger<-prune_taxa(taxa_sums(pskin_asv_AD_hellinger) != 0, pskin_asv_AD_hellinger)
+
+#asv level analysis on AD skin samples, percentage transforemed counts
+pskin_asv_AD_percent<-subset_samples(pskin_asv_percent,group=="AD")
+pskin_asv_AD_percent<-prune_taxa(taxa_sums(pskin_asv_AD_percent) != 0, pskin_asv_AD_percent)
+
+#spp level analysis on control skin samples. untransforemd counts
+pskin_spp_control<-subset_samples(pskin_spp,samplesite=="Control_skin")
+pskin_spp_control<-prune_taxa(taxa_sums(pskin_spp_control) != 0, pskin_spp_control)
+
+#asv level analysis on control skin samples, untransforemd counts
+pskin_asv_control<-subset_samples(pskin,group=="Control")
+pskin_asv_control<-prune_taxa(taxa_sums(pskin_asv_control) != 0, pskin_asv_control)
+
+#asv level analysis on control skin samples, hellinger transforemd counts
+pskin_asv_control_hellinger<-subset_samples(pskin_asv_hellinger,group=="Control")
+pskin_asv_control_hellinger<-prune_taxa(taxa_sums(pskin_asv_control_hellinger) != 0, pskin_asv_control_hellinger)
+
+#asv level analysis on control skin samples, percentage
+pskin_asv_control_percent<-subset_samples(pskin_asv_percent,group=="Control")
+pskin_asv_control_percent<-prune_taxa(taxa_sums(pskin_asv_control_percent) != 0, pskin_asv_control_percent)
+```
+
+**transformations on spp level**
+```{r include=FALSE}
+#relativ abbundance
+pskin_spp_percent<-transform_sample_counts(pskin_spp,function(x) x/sum(x)*100)
+pskin_spp_AD_percent<-transform_sample_counts(pskin_spp_AD,function(x) x/sum(x)*100)
+pskin_spp_control_percent<-transform_sample_counts(pskin_spp_control,function(x) x/sum(x)*100)
+
+#hellinger transformation
+pskin_spp_hellinger<-transform_sample_counts(pskin_spp,function(x) sqrt(x/sum(x)))
+pskin_spp_AD_hellinger<-transform_sample_counts(pskin_spp_AD,function(x) sqrt(x/sum(x)))
+pskin_spp_control_hellinger<-transform_sample_counts(pskin_spp_control,function(x) sqrt(x/sum(x)))
+```
+
+
+
+
+# 2) Analysis: AD samples only
+
+
+## Define staphylococcal community clusters
+
+
+**JSD + PAM clustering for AD samples**
+Phyloseq object used = Species level. hellinger transformed counts.
+lesional and non-lesional AD skin combined
+```{r include=FALSE}
+s_jsd_dist <- phyloseq::distance(pskin_spp_AD_hellinger, method = "jsd")
+s_ord <- ordinate(pskin_spp_AD_hellinger, method = "MDS", distance = s_jsd_dist)
+plot(s_ord$values$Eigenvalues)  
+x <- s_ord$vectors[,1:3] 
+
+pamPCoA = function(x, k) {
+    list(cluster = pam(x[,1:2], k, cluster.only = TRUE))
+}
+```
+
+**make variable with cluster definition in sampledata**
+Looking at barplots and PCoA and making ANSOIM/PERMANOVA test for k=2,3,4,5,and 6, in order to decide the optimal umber of clusters
+```{r eval=FALSE, include=FALSE}
+#K_no<-2
+#K_no<-3
+K_no<-4
+#K_no<-5
+#K_no<-6
+x <- s_ord$vectors[,1:3]
+data.cluster <- pam(x, k=K_no, cluster.only=T)
+clust <- as.factor(pam(x, k=K_no, cluster.only=T))
+
+sample_data(pskin_spp_AD)$AD_clusters <- clust
+sample_data(pskin_spp_AD_percent)$AD_clusters <- clust
+sample_data(pskin_spp_AD_hellinger)$AD_clusters <- clust
+sample_data(pskin_asv_AD_hellinger)$AD_clusters <- clust
+sample_data(pskin_asv_AD)$AD_clusters <- clust
+sample_data(pskin_asv_AD_percent)$AD_clusters <- clust
+sample_data(pskin_16S_AD)$AD_clusters <- clust
+```
+
+
+**visualize usign ordination plot**
+MDS and JSD
+```{r echo=FALSE, fig.height=8, fig.width=8}
+s_ord <- ordinate(pskin_spp_AD_hellinger, method = "MDS", distance = s_jsd_dist)
+
+ord_plot<-plot_ordination(pskin_spp_AD_hellinger,s_ord, axes=c(1,2),color="AD_clusters")+   
+  geom_point(size=1, alpha=0.6)+
+  stat_ellipse(level=0.75)+
+  mytheme+
+  scale_color_manual(values=c(color_ad_skin_clusters))+
+  labs(color="Clusters")
+
+ord_plot2<-plot_ordination(pskin_spp_AD_hellinger,s_ord, axes=c(1,3),color="AD_clusters")+  
+  geom_point(size=2, alpha=0.05)+
+  stat_ellipse(level=0.75)+
+  mytheme+
+  scale_color_manual(values=c(color_ad_skin_clusters))+
+  labs(color="Clusters")
+
+ord_plot3<-plot_ordination(pskin_spp_AD_hellinger,s_ord, axes=c(2,3),color="AD_clusters")+   
+  geom_point(size=2, alpha=0.05)+
+  stat_ellipse(level=0.75)+
+  mytheme+
+  scale_color_manual(values=c(color_ad_skin_clusters))+
+  labs(color="Clusters")
+
+grid.arrange(ord_plot,ord_plot2,ord_plot3,nrow=2, top="AD clusters defined by PAM clustering of Jensen-Shannon divergence (MDS)")
+#ggsave(plot=ord_plot,filename = "file_name.pdf",device = "pdf",width = 15,height = 12,units = "cm")
+```
+
+
+
+
+**look at species distributions (barplots) witin defined clusters**
+Use relative abbundance analysis to check staph spp distributions in samples. 
+
+
+How many different spp identified in skin samples?
+```{r echo=FALSE}
+pskin_spp_AD_percent
+```
+--> thus 32 different species
+
+
+**identify top 10 species in AD skin samples, based on the proportional abudnances**      
+```{r eval=FALSE, include=FALSE}
+asv<-data.frame(t(otu_table(pskin_spp_AD_percent)))
+taxa<-data.frame(tax_table(pskin_spp_AD_percent)[,1])
+cbind(row.names(asv),row.names(taxa))
+row.names(asv)<-taxa$Genus_Species
+
+asv$sum<-apply(asv, 1, sum)
+asv<-asv[sort.list(asv$sum, decreasing=T),]
+asv$sum
+
+top10_taxa<-row.names(asv)[1:10]
+```
+
+
+**prepare data for barplot visulaization**
+```{r echo=TRUE}
+pskin_df<-psmelt(pskin_spp_AD_percent)
+
+#defining all Species not in the top10-list as "other"
+pskin_df$Genus_Species<-as.character(pskin_df$Genus_Species)
+pskin_df$Genus_Species[!pskin_df$Genus_Species %in% top10_taxa]<-c("other")
+
+# ordering taxa by abbundance
+o_10<-c("other",top10_taxa)
+pskin_df$Genus_Species<-factor(pskin_df$Genus_Species,levels=o_10)
+
+#ordering samples by 1)samplesite,2)SCORAD-group 3)skin types, 4)aureus culture status
+sub<-data.frame(sample_data(pskin_spp_AD))
+sub<-sub[with(sub,order(samplesite,SCORAD_group,skin_types,aureus)),]
+order<-sub$sample_id
+pskin_df$Sample<-factor(pskin_df$Sample,levels=order)
+```
+
+
+** Barplots used to decied the optimal mumber of clusters**
+```{r echo=FALSE, fig.height=5, fig.width=10}
+p1<-ggplot(pskin_df, aes(x=Sample, y=Abundance, fill=Genus_Species))+
+  geom_bar(aes(),stat="identity",position="stack")+
+  mytheme+                       
+  theme(axis.ticks.x=element_blank())+                         
+  theme(strip.text.x = element_text(size=12, face = "bold"))+  
+  theme(axis.title.x = element_blank())+
+  scale_fill_manual(values=color_metro)+
+  ggtitle("Staphylococcus spp. distribution in AD samples (PAM clustering - spp level")+
+  ylab("Relative abbundance (%)")
+
+# lower bar 1, samplesite
+pskin_sub<-pskin_df[,c("Sample","AD_clusters","samplesite")]
+pskin_df_m <- melt(pskin_sub, id.vars = c("Sample", "AD_clusters")) 
+names(pskin_df_m)<-c("Sample", "AD_clusters", "sampling_var", "sample_site")
+pskin_df_m$Sample<-factor(pskin_df_m$Sample,levels=order)
+
+p2<-ggplot(pskin_df_m, aes(x=Sample, y=sampling_var))+
+  geom_tile(aes(fill=sample_site),width = 1.0)+ 
+  mytheme+
+  theme(axis.ticks.x=element_blank(),axis.ticks.y=element_blank())+
+  theme(axis.title.x = element_blank())+
+  scale_fill_manual(values = c(color_ad))+
+  labs(y="")
+
+p1.1<-p1 + facet_grid(. ~AD_clusters , scales = "free_x", space="free") + theme(axis.text.x = element_blank())
+p2.1<-p2+facet_grid(. ~AD_clusters, scales = "free_x", space="free")+ theme(strip.background = element_blank(), strip.text.x = element_blank(),axis.text.y = element_blank(),axis.text.x = element_blank())
+
+cc<-cowplot::plot_grid(p1.1, p2.1, ncol = 1, align = "v",axis = "lr",rel_heights = c(3, 0.5))         
+cc
+```
+
+
+**Test id the compositions within defined clusters are significant different from each other (ANOSIM/Permanpva)**
+Here I use helligner transformed counts. species level. I.e. the same phylo object as was used for generating the clusters
+
+**anosim**
+assumptions = similar range of ranks
+```{r echo=FALSE}
+a<-anosim(otu_table(pskin_spp_AD_hellinger),grouping =as.factor(sample_data(pskin_spp_AD_hellinger)$AD_clusters),distance = "bray",permutations=999)
+summary(a)
+plot(a)
+```
+
+**Permanova**
+Assumtions: the variance (average distance to centroid) must be the same in all groups
+
+1) check assumptions with betadisper
+```{r echo=FALSE}
+#make distance matrix:
+dist<-phyloseq::distance(pskin_spp_AD_hellinger, method = "bray")
+
+# analysis of homogeneity of group dispersions (check if variance within groups are the same)
+bd<-betadisper(dist,group=get_variable(pskin_spp_AD_hellinger,"AD_clusters"))
+bd
+anova(bd)
+```
+p<0.05 --> Significant difference in variance --> assumtions not okay! --> use ANOSIM instead.
+
+
+### conclusion: 
+use k=4 clusters
+
+
+
+
+## Overall description of staph Species distribution within AD LS and NLS
+
+
+**table summaries - howmany samples in each cluster**
+```{r}
+'number of samples in each CST'
+table(sample_data(pskin_spp_AD_percent)$AD_clusters)
+'...stratified by samplesite'
+table(sample_data(pskin_spp_AD_percent)$samplesite,sample_data(pskin_spp_AD_percent)$AD_clusters)
+prop.table(table(sample_data(pskin_spp_AD_percent)$samplesite,sample_data(pskin_spp_AD_percent)$AD_clusters),2)
+```
+
+**figure 3A in paper; Staph species barplot accros the four defined community clusters**
+```{r echo=TRUE, fig.width=10,fig.height=5}
+#taxa barplot; relative abudancne on Staph spp within the bacterial community:
+
+ # 1) make variable with abundances of Staph spp based on the whole bacterial community:
+pskin_df$Abundance_2<-((pskin_df$Abundance/100)*pskin_df$Staph_proportion)*100
+  # 2),sum op in each sample to 100 by creating value for all other bacteria. 
+meta_ad<-sample_data(pskin_spp_AD)
+meta_ad$other_bact_proportion<-(1-meta_ad$Staph_proportion)*100
+  # 3) create new dataframe with combined
+meta_ad_sub<-data.frame("Sample"=meta_ad$sample_id,"Abundance_2"=meta_ad$other_bact_proportion,"Genus_Species"=c("Non_Staphylococcal_species"),"AD_clusters"=meta_ad$AD_clusters)
+pskin_df_sub<-pskin_df %>%dplyr::select(Sample,Abundance_2,Genus_Species,AD_clusters) 
+pskin_df_sub<-rbind(pskin_df_sub,meta_ad_sub)
+ # 4) order samples and select 8 most abudannt species to be colored:
+pskin_df_sub$Sample<-factor(pskin_df_sub$Sample,levels=order)
+taxa_view<-c("Non_Staphylococcal_species",top10_taxa[1:8])
+pskin_df_sub$Genus_Species<-as.character(pskin_df_sub$Genus_Species)
+pskin_df_sub$Genus_Species[!pskin_df_sub$Genus_Species %in% taxa_view]<-c("other_Staphylococcal_species")
+o_taxa<-c(taxa_view,"other_Staphylococcal_species")
+pskin_df_sub$Genus_Species<-factor(pskin_df_sub$Genus_Species,levels=o_taxa)
+
+ #plot
+p1b<-ggplot(pskin_df_sub, aes(x=Sample, y=Abundance_2, fill=Genus_Species))+
+  geom_bar(aes(),stat="identity",position="stack")+
+  mytheme+                       
+  theme(axis.ticks.x=element_blank())+                         
+  theme(strip.text.x = element_text(size=12, face = "bold"))+  
+  theme(axis.title.x = element_blank(),axis.text.x = element_blank())+
+  theme(legend.box.background = element_rect(colour = "black"))+
+  scale_fill_manual(values=color_metro,name="Species")+
+  #ggtitle("Bacterial communities")+
+  ylab("Relative abundance of Staphylococcal species \nwithin the bacterial community (%)")
+
+
+# lower bar 1, samplesite
+pskin_sub<-pskin_df[,c("Sample","AD_clusters","samplesite")]
+pskin_df_m <- melt(pskin_sub, id.vars = c("Sample", "AD_clusters")) 
+names(pskin_df_m)<-c("Sample", "AD_clusters", "sampling_var", "sample_site")
+pskin_df_m$Sample<-factor(pskin_df_m$Sample,levels=order)
+
+p2<-ggplot(pskin_df_m, aes(x=Sample, y=sampling_var))+
+  geom_tile(aes(fill=sample_site),width = 1.0)+ 
+  mytheme+
+  theme(axis.ticks.x=element_blank(),axis.ticks.y=element_blank())+
+  theme(axis.title.x = element_blank())+
+  theme(legend.direction = "horizontal",legend.box.background = element_rect(colour = "black"))+
+  scale_fill_manual(values = c(color_ad),name="Skin sites",labels=c("AD LS", "AD NLS"))+
+  labs(y="")
+
+# lower bar 2 - skin types
+pskin_sub<-pskin_df[,c("Sample","AD_clusters","skin_types")]
+pskin_df_m <- melt(pskin_sub, id.vars = c("Sample", "AD_clusters")) 
+names(pskin_df_m)<-c("Sample", "AD_clusters", "sampling_var", "skin_types")
+pskin_df_m$Sample<-factor(pskin_df_m$Sample,levels=order)
+
+p3<-ggplot(pskin_df_m, aes(x=Sample, y=sampling_var))+
+  geom_tile(aes(fill=skin_types),width = 1.0)+ 
+  mytheme+
+  theme(axis.ticks.x=element_blank(),axis.ticks.y=element_blank())+
+  theme(axis.title.x = element_blank())+
+  theme(legend.direction = "horizontal",legend.box.background = element_rect(colour = "black"))+
+  scale_fill_manual(values = c(color_skintypes),name="Skin types",labels=c("Dry","Moist","Sebaceous"))+
+  labs(y="")
+
+
+#lower bar3 = colonization status:
+pskin_sub<-pskin_df[,c("Sample","AD_clusters","aureus")]
+pskin_df_m <- melt(pskin_sub, id.vars = c("Sample", "AD_clusters")) 
+names(pskin_df_m)<-c("Sample", "AD_clusters", "sampling_var", "aureus")
+pskin_df_m$Sample<-factor(pskin_df_m$Sample,levels=order)
+pskin_df_m$aureus<-factor(pskin_df_m$aureus)
+
+p4<-ggplot(pskin_df_m, aes(x=Sample, y=sampling_var))+
+  geom_tile(aes(fill=aureus),width = 1.0)+ 
+  mytheme+
+  theme(axis.ticks.x=element_blank(),axis.ticks.y=element_blank())+
+  theme(axis.title.x = element_blank())+
+  theme(legend.direction = "horizontal",legend.box.background = element_rect(colour = "black"))+
+  scale_fill_manual(values = c(color_sa),name="S. aureus by culturing",labels=c("Absence","Presence"))+
+  labs(y="")
+
+
+#lower bar 4: Scorad groups
+pskin_sub<-pskin_df[,c("Sample","AD_clusters","SCORAD_group")]
+pskin_df_m <- melt(pskin_sub, id.vars = c("Sample", "AD_clusters")) 
+names(pskin_df_m)<-c("Sample", "AD_clusters", "sampling_var", "AD_severity")
+pskin_df_m$Sample<-factor(pskin_df_m$Sample,levels=order)
+
+p5<-ggplot(pskin_df_m, aes(x=Sample, y=sampling_var))+
+  geom_tile(aes(fill=AD_severity),width = 1.0)+ 
+  mytheme+
+  theme(axis.ticks.x=element_blank(),axis.ticks.y=element_blank())+
+  theme(axis.title.x = element_blank())+
+  theme(legend.direction = "horizontal",legend.box.background = element_rect(colour = "black"))+
+  scale_fill_manual(values = c(color_scorad3),name="AD severity",labels=c("Mild AD","Moderate AD","Severe AD"))+
+  labs(y="")
+
+
+CST_labels<-c("Community cluster 1","Community cluster 2","Community cluster 3","Community cluster 4")
+names(CST_labels)<-c("1","2","3","4")
+
+p1.1<-p1 + facet_grid(. ~AD_clusters , scales = "free_x", space="free",labeller = labeller(AD_clusters=CST_labels))+theme(strip.text.x = element_text(size = 10,face = "bold"))
+p1b.1<-p1b + facet_grid(. ~AD_clusters , scales = "free_x", space="free",labeller = labeller(AD_clusters=CST_labels))+theme(strip.text.x = element_text(size = 10,face = "bold"))
+
+p2.1<-p2 + facet_grid(. ~AD_clusters , scales = "free_x", space="free") +theme(strip.background = element_blank(), strip.text.x = element_blank(),axis.text.y = element_blank(),axis.text.x = element_blank())
+
+p3.1<-p3 + facet_grid(. ~AD_clusters , scales = "free_x", space="free") +theme(strip.background = element_blank(), strip.text.x = element_blank(),axis.text.y = element_blank(),axis.text.x = element_blank())
+
+p4.1<-p4 + facet_grid(. ~AD_clusters , scales = "free_x", space="free") +theme(strip.background = element_blank(), strip.text.x = element_blank(),axis.text.y = element_blank(),axis.text.x = element_blank())
+
+p5.1<-p5 + facet_grid(. ~AD_clusters , scales = "free_x", space="free") +theme(strip.background = element_blank(), strip.text.x = element_blank(),axis.text.y = element_blank(),axis.text.x = element_blank())
+
+c<-cowplot::plot_grid(p1b.1,p2.1,p5.1,p3.1,p4.1, ncol = 1, align = "v",axis = "lr",rel_heights = c(0.9, 0.1,0.1,0.1,0.1))
+c
+
+#ggsave(plot=c,filename = "file_name.pdf",device = "pdf",width = 33,height = 15,units = "cm")
+```
+
+
+## Differeces according to skin types
+
+
+**table summary; how many LS/NLS samples collected from which areas?**
+```{r}
+table(sample_data(pskin_spp_AD)$samplesite,sample_data(pskin_spp_AD)$skin_types)
+```
+
+
+### beta diversity
+
+**overall differences in staphylococcal comunity compostion between skin types:**
+Plot beta-diversity:
+
+```{r echo=FALSE, fig.height=8, fig.width=8}
+b_ord <- ordinate(pskin_spp_AD_hellinger, method = "PCoA", distance = "bray")
+
+ord_plot<-plot_ordination(pskin_spp_AD_hellinger,b_ord, axes=c(1,2),color="skin_types")+   
+  geom_point(size=2, alpha=0.05)+
+  stat_ellipse(level=0.75)+
+  scale_color_manual(values=c(color_skintypes))
+
+ord_plot2<-plot_ordination(pskin_spp_AD_hellinger,b_ord, axes=c(1,3),color="skin_types")+   
+  geom_point(size=2, alpha=0.05)+
+  stat_ellipse(level=0.75)+
+  scale_color_manual(values=c(color_skintypes))
+
+ord_plot3<-plot_ordination(pskin_spp_AD_hellinger,b_ord, axes=c(2,3),color="skin_types")+   
+  geom_point(size=2, alpha=0.05)+
+  stat_ellipse(level=0.75)+
+  scale_color_manual(values=c(color_skintypes))
+
+grid.arrange(ord_plot,ord_plot2,ord_plot3,nrow=2)
+
+#ggsave(plot=ord_plot,filename = "File_name.pdf",device = "pdf",width = 15,height = 15,units = "cm")
+```
+
+**test if they differ**
+```{r echo=FALSE}
+a<-anosim(otu_table(pskin_spp_AD_hellinger),grouping =as.factor(sample_data(pskin_spp_AD_hellinger)$skin_types),distance = "bray",permutations=999)
+summary(a)
+plot(a)
+```
+
+**conclusion**
+--> No difference between skin types
+
+
+
+
+
+### Differences accross  clusters?
+
+** table summaries - skin types associated to cluster assignments?**
+```{r}
+#prepare dataframes
+pskin_df_ls<-data.frame(sample_data(pskin_spp_AD_percent)[sample_data(pskin_spp_AD_percent)$samplesite=="AD_LS",])
+pskin_df_nls<-data.frame(sample_data(pskin_spp_AD_percent)[sample_data(pskin_spp_AD_percent)$samplesite=="AD_NLS",])
+
+'table summary for ls samples'
+table(pskin_df_ls$skin_types,pskin_df_ls$AD_clusters)
+prop.table(table(pskin_df_ls$skin_types,pskin_df_ls$AD_clusters),1)
+prop.table(table(pskin_df_ls$skin_types,pskin_df_ls$AD_clusters),2)
+
+'table summary for nls samples'
+table(pskin_df_nls$skin_types,pskin_df_nls$AD_clusters)
+prop.table(table(pskin_df_nls$skin_types,pskin_df_nls$AD_clusters),1)
+prop.table(table(pskin_df_nls$skin_types,pskin_df_nls$AD_clusters),2)
+```
+
+**fisher test results**
+Do on LS and NLS seperate, (i.e. no paired samples)
+```{r}
+'ls'
+fisher.test(pskin_df_ls$AD_clusters,pskin_df_ls$skin_types)
+'nls'
+fisher.test(pskin_df_nls$AD_clusters,pskin_df_nls$skin_types)
+```
+
+**conclusion**
+LS: no difference
+NLS; signficant differece (p=0.04)
+
+
+
+### Alpha-diersity
+i.e. staphylococcal diversity (tuf) 
+made on spp. level. untransformed counts
+
+**meassure shannon and richness**
+```{r include=FALSE}
+diversity<-estimate_richness(pskin_spp_AD,measures = c("Observed","Shannon"))
+diversity$sample_id<-row.names(diversity)
+
+meta_sub<-data.frame("sample_id"=sample_data(pskin_spp_AD_hellinger)$sample_id, id=sample_data(pskin_spp_AD_hellinger)$id,"samplesite"=sample_data(pskin_spp_AD_hellinger)$samplesite,"skin_types"=sample_data(pskin_spp_AD_hellinger)$skin_types,"AD_clusters"=sample_data(pskin_spp_AD_hellinger)$AD_clusters)
+
+diversity<-merge(meta_sub,diversity,by="sample_id",all.x=TRUE)
+```
+
+**plot**
+```{r echo=FALSE}
+#density plots
+richness<-ggplot(diversity,aes(x=Observed,fill=skin_types))+
+  geom_density(alpha=0.25)+
+  ggtitle("Staphylococcus spp richness")
+
+shannon<-ggplot(diversity,aes(x=Shannon,fill=skin_types))+
+  geom_density(alpha=0.25)+
+  ggtitle("Staphylococcus spp shannon diversity")
+
+grid.arrange(richness,shannon,nrow=2)
+```
+
+**summaries**
+```{r}
+'Shannon'
+tapply(diversity$Shannon, diversity$AD_clusters,summary)
+'richness'
+tapply(diversity$Observed, diversity$AD_clusters,summary)
+```
+
+
+
+## Difference in Community cluster type between LS and NLS?
+
+**logistic regression analysis**
+Follwed by a likelihood ratio test
+
+```{r}
+#preapre data
+meta_ad <- data.frame(sample_data(pskin_spp_AD_percent))
+meta_ad$samplesite<-factor(meta_ad$samplesite,levels=c("AD_NLS","AD_LS"))
+meta_ad$id<-factor(meta_ad$id)
+meta_ad$skin_types<-factor(meta_ad$skin_types)
+
+#logistic regression analysis
+m1<-glm(samplesite~ AD_clusters,data=meta_ad, family=binomial)
+'summary'
+summary(m1)
+```
+**likelihodd ratio test**
+```{r}
+drop1(m1,test="Chisq") 
+```
+
+
+**Figure 3B in paper; sankey plot**
+```{r echo=FALSE, fig.height=4,fig.width=6}
+meta_ad <- data.frame(sample_data(pskin_spp_AD_percent))
+meta_ad <- meta_ad %>%  group_by(samplesite,AD_clusters) %>%  mutate(count_clust = n())
+
+p_sankey<-ggplot(meta_ad,aes(x = samplesite, stratum = AD_clusters, alluvium = id,fill = AD_clusters, label = AD_clusters)) +
+  scale_x_discrete(expand = c(.1, .1),breaks=c("AD_LS","AD_NLS"),labels=c("AD LS", "AD NLS")) +
+  scale_fill_manual(name = "AD_clusters", values = color_ad_skin_clusters) +
+  geom_flow(alpha=0.75) +
+  geom_stratum() +
+  geom_text(aes(label = paste0("Community cluster ", AD_clusters, " ", "\n(n=",count_clust,")")),stat = "stratum", size = 2, color = "white", fontface="bold") +
+  geom_text(stat = "flow",aes(label = after_stat(n)),nudge_x = -.2,size=2)+  
+  #theme(panel.border = element_rect(colour = "black", fill=NA, size=1))+
+  theme(axis.title.x = element_blank(), axis.text.x = element_text(size = 8,face="bold"))+
+  theme(axis.ticks.y = element_blank(),axis.text.y = element_blank())+
+  theme(legend.position = "none")
+p_sankey
+
+#ggsave(plot=p_sankey,filename = "file_namepdf",device = "pdf",width = 13,height = 8,units = "cm")
+```
+
+
+
+**table summary**
+I.e. howmany patients have LS and NLS smaples assigned to the same community cluster?
+```{r echo=FALSE}
+# firt make df with info
+df2<-data.frame()
+
+id<-unique(meta_ad$id)
+
+for(i in id){
+  cst_var<-if_else(meta_ad$AD_clusters[meta_ad$samplesite=="AD_LS" & meta_ad$id==i]==meta_ad$AD_clusters[meta_ad$samplesite=="AD_NLS" & meta_ad$id==i],"same_cluster","diff_cluster")
+  patient<-i
+  cst_ls<-meta_ad$AD_clusters[meta_ad$samplesite=="AD_LS" & meta_ad$id==i]
+  cst_nls<-meta_ad$AD_clusters[meta_ad$samplesite=="AD_NLS" & meta_ad$id==i]
+  a<-cbind(cst_var,patient,cst_ls,cst_nls)
+  df2<-rbind(df2,a)
+}
+#df2
+
+table(df2$cst_var)
+```
+
+
+** bigger change of having LS and NLS smaples belonging to the same cluster if samples where collected from same skin type**
+i.e. from moist, dry or sebaseouc skin
+
+1) check how many patients have LS and NLS samples taken from area with same skin type
+```{r echo=FALSE}
+# firt make df with info
+
+df3<-data.frame()
+id<-unique(meta_ad$id)
+
+for(i in id){
+  skin_var<-if_else(meta_ad$skin_types[meta_ad$samplesite=="AD_LS" & meta_ad$id==i]==meta_ad$skin_types[meta_ad$samplesite=="AD_NLS" & meta_ad$id==i],"same_skintype","diff_skintype")
+  patient<-i
+  skin_ls<-meta_ad$skin_types[meta_ad$samplesite=="AD_LS" & meta_ad$id==i]
+  skin_nls<-meta_ad$skin_types[meta_ad$samplesite=="AD_NLS" & meta_ad$id==i]
+  area_ls<-meta_ad$samplelocation[meta_ad$samplesite=="AD_LS" & meta_ad$id==i]
+  area_nls<-meta_ad$samplelocation[meta_ad$samplesite=="AD_NLS" & meta_ad$id==i]
+  a<-cbind(skin_var,patient,skin_ls,skin_nls,area_ls,area_nls)
+  df3<-rbind(df3,a)
+}
+#df3
+table(df3$skin_var)
+```
+
+
+2) combine df2 and df3 information in order to see how big a proportion of the patients with LS/NLS samples assigned to the same community cluster also had LS/NLS samples collected from an areas of sam eskin type
+```{r echo=FALSE}
+df4<- merge(df2,df3,by="patient")
+table(df4$skin_var,df4$cst_var)
+prop.table(table(df4$skin_var,df4$cst_var),2)
+
+fisher.test(df4$skin_var,df4$cst_var)
+```
+
+
+3) Statistics:
+Logistic regression (dependent variable= community cluster type, independent = skin type)
+```{r echo=FALSE}
+df4$cst_var_binomial<-ifelse(df4$cst_var=="same_cluster",1,0)
+
+m1<-glm(cst_var_binomial~ skin_var,data=df4, family=binomial)
+'summary'
+summary(m1)
+'OR and CI'
+exp(cbind(OR=coef(m1), confint(m1)))
+```
+
+
+## overall differences in staphylococcal community compostion between LS and NLS?
+
+
+**1) plot betadiversities **
+based on bray curtis dissimilarity matrix
+based on hellinger transformed counts on species level
+```{r echo=FALSE, fig.height=8, fig.width=8}
+b_ord <- ordinate(pskin_spp_AD_hellinger, method = "PCoA", distance = "bray")
+
+ord_plot<-plot_ordination(pskin_spp_AD_hellinger,b_ord, axes=c(1,2),color="samplesite")+   
+  geom_point(size=2, alpha=0.05)+
+  stat_ellipse(level=0.75)+
+  scale_color_manual(values=c(color_ad))
+
+ord_plot2<-plot_ordination(pskin_spp_AD_hellinger,b_ord, axes=c(1,3),color="samplesite")+   
+  geom_point(size=2, alpha=0.05)+
+  stat_ellipse(level=0.75)+
+  scale_color_manual(values=c(color_ad))
+
+ord_plot3<-plot_ordination(pskin_spp_AD_hellinger,b_ord, axes=c(2,3),color="samplesite")+   
+  geom_point(size=2, alpha=0.05)+
+  stat_ellipse(level=0.75)+
+  scale_color_manual(values=c(color_ad))
+
+grid.arrange(ord_plot,ord_plot2,ord_plot3,nrow=2)
+
+#ggsave(plot=ord_plot,filename = "file_name.pdf",device = "pdf",width = 15,height = 15,units = "cm")
+```
+
+**2) statistical tests**
+
+PERMANOVA; assumotions=equal variance
+```{r echo=TRUE}
+#(check if variance within groups are the same)
+dist<-phyloseq::distance(pskin_spp_AD_hellinger, method = "bray")
+
+bd<-betadisper(dist,group=get_variable(pskin_spp_AD_hellinger,"samplesite"))
+bd
+anova(bd)
+```
+
+In adonis function (PERMANOVA) it is possible to stratify for covariate. Thus, I decided to stratify for differences in skin types of the sampling location.
+```{r}
+aa<-adonis(formula=dist~samplesite,data=get_variable(pskin_spp_AD_hellinger),strata=get_variable(pskin_spp_AD_hellinger,"skin_types"),permuations=999)
+aa
+```
+
+
+## S. aureus culture data
+
+### Assocation between  samplesite (LS/NLS) and S. aureus culture results (pos/neg)
+
+**summaries**
+```{r}
+meta<-data.frame(sample_data(pskin_spp_AD_hellinger))
+meta$aureus<-as.factor(meta$aureus)  #Of notice, the variabel aureus conatins information on aureus cilture results (1=postive,0=negative)
+meta$samplesite<-factor(meta$samplesite,levels=c("AD_NLS","AD_LS"))
+
+table(meta$aureus,meta$samplesite)
+prop.table(table(meta$aureus,meta$samplesite),2)
+```
+
+**Statistics**
+Mixed effect logistic regression in order to include ID as random effect and skin types as fixed effect, SA= depedndent variable
+```{r}
+'model'
+m_sa<-glmer(aureus ~  samplesite + skin_types + (1|id),data=meta, family = binomial)
+summary(m_sa)
+
+'likihood ratio test'
+drop1(m_sa,test="Chisq")
+```
+
+
+### Assocations between community cluster assignemnt and S. aureus culture pos/neg 
+
+**tabel summaries**
+```{r}
+table(sample_data(pskin_spp_AD_hellinger)$AD_clusters,sample_data(pskin_spp_AD_hellinger)$aureus)
+prop.table(table(sample_data(pskin_spp_AD_hellinger)$AD_clusters,sample_data(pskin_spp_AD_hellinger)$aureus),1)
+prop.table(table(sample_data(pskin_spp_AD_hellinger)$AD_clusters,sample_data(pskin_spp_AD_hellinger)$aureus),2)
+```
+
+**stats**
+Mixed effect logistic regression in order to include ID as random effect
+samplesite and skin types are included as fixed effects
+```{r}
+#prepare data
+meta<-data.frame(sample_data(pskin_spp_AD_hellinger))
+meta$aureus<-as.factor(meta$aureus)
+meta$samplesite<-factor(meta$samplesite,levels=c("AD_NLS","AD_LS"))
+
+#model
+m_sa<-glmer(aureus ~  relevel(AD_clusters,ref = "3") + samplesite + skin_types + (1|id),data=meta, family = binomial)
+summary(m_sa)
+#effect sized and confidence intervals
+se<-sqrt(diag(vcov(m_sa)))
+exp(cbind(OR = fixef(m_sa), low = fixef(m_sa) - 1.96 * se, high = fixef(m_sa) + 1.96 *se))
+```
+**likelihodd ratio test**
+```{r}
+#likelihood ratio test
+drop1(m_sa,test="Chisq")
+```
+
+
+
+### Correlations between S. aureus abudannce and S. aureus culture results
+
+** is S aureus estimated absolute abundance related to culturing? **
+```{r}
+#prepare dataframe with absolute abundance variable
+#1) subset S. aureus data
+pskin_df_aureus<-filter(pskin_df,Genus_Species=="Staphylococcus_aureus")
+#2) calculate the proportional abudnance of S. aureus within the bacterial community by combining aureus proportions (tuf derived)  with Staphylococcus proportions (16S rRNA)
+pskin_df_aureus$sa_abundance_in_bacterial_pop<-((pskin_df_aureus$Abundance/100)*pskin_df_aureus$Staph_proportion)*100
+#)estimate aboslute abudnance by combining above pproportion with total bacterial densities i.e. the qPCR data. nb, the qPCR values (variable "bacteria_quantity" is divided by 2, in order to get counts within 1 inestead of 2 µl DNA eluate)
+pskin_df_aureus$absolut_sa_abb<-(pskin_df_aureus$sa_abundance_in_bacterial_pop/100)*(pskin_df_aureus$bacteria_quantity/2) 
+#log transform absolute counts
+pskin_df_aureus$absolut_sa_abb_log10<-log10(pskin_df_aureus$absolut_sa_abb+1)
+
+
+# plot
+samplesite_labels<-c("AD lesional skin","AD nonlesional skin")
+names(samplesite_labels)<-c("AD_LS","AD_NLS")
+
+p<-ggplot(pskin_df_aureus,aes(y=absolut_sa_abb_log10,x=aureus))+
+  geom_boxplot(width=0.6)+
+  geom_jitter(width = 0.15,size=1.5)+
+  facet_grid( ~samplesite, scales="free_y", space="free",labeller = labeller(samplesite=samplesite_labels))+
+  mytheme+
+  ylab("Estimated absolute abundance of S. aureus (log10)")+
+  xlab("S. aureus culture result")+
+  scale_x_discrete(breaks=c("0","1"),labels=c("culture negative","culture postive"))
+p 
+#ggsave(plot=p,filename = "File_name.pdf",device = "pdf",width = 15,height = 10,units = "cm")
+
+# stat test: 1) LS and NLS seperately, use logistic regression and likelihood ratio test
+pskin_df_aureus$aureus<-factor(pskin_df_aureus$aureus)
+pskin_df_aureus$absolut_sa_abb_log10<-as.numeric(pskin_df_aureus$absolut_sa_abb_log10)
+
+m1<-glm(aureus~absolut_sa_abb_log10,data=pskin_df_aureus[pskin_df_aureus$samplesite=="AD_LS",],family=binomial)
+summary(m1)
+drop1(m1,test="Chisq")
+
+m2<-glm(aureus~absolut_sa_abb_log10,data=pskin_df_aureus[pskin_df_aureus$samplesite=="AD_NLS",],family=binomial)
+summary(m2)
+drop1(m2,test="Chisq")
+
+# stat test: 2) LS and NLS combined: use mixed model logistic regression and likelihood ratio test
+m4<-glmer(aureus ~  absolut_sa_abb_log10+(1|id),data=pskin_df_aureus, family = binomial)
+summary(m4)
+drop1(m4,test="Chisq")
+```
+
+
+
+
+
+
+## Bcaterial Shannon diversity accross cluster types
+
+**make diversity meassures for my samples:**
+Here I use ASV file with raw counts for 16S
+
+
+```{r include=FALSE}
+# 16S
+diversity_16S<-estimate_richness(pskin_16S,measures = c("Observed","Shannon"))
+diversity_16S$sample_id<-row.names(diversity_16S)
+
+diversity_16S<-merge(meta_sub,diversity_16S,by="sample_id",all.X=TRUE)
+```
+
+
+
+**Plot**
+Density plots
+```{r echo=FALSE}
+shannon_2<-ggplot(diversity_16S,aes(x=Shannon,fill=AD_clusters))+
+  geom_density(alpha=0.25)+
+  ggtitle("Bacterial ASV shannon diversity")
+shannon_2
+```
+
+Boxplots
+```{r echo=FALSE}
+shannon_2<-ggplot(diversity_16S,aes(y=Shannon,x=AD_clusters))+
+  geom_boxplot()+
+  ggtitle("Bacterial ASV shannon diversity")
+shannon_2
+```
+
+
+**summaries**
+```{r}
+'cst 1'
+summary(diversity_16S$Shannon[diversity$AD_clusters == "1"])
+'cst 2'
+summary(diversity_16S$Shannon[diversity$AD_clusters == "2"])
+'cst 3'
+summary(diversity_16S$Shannon[diversity$AD_clusters == "3"])
+'cst 4'
+summary(diversity_16S$Shannon[diversity$AD_clusters == "4"])
+```
+
+
+**statistics**
+Possible to make an parametric test here?
+```{r echo=FALSE  }
+#possible to use a parametric test?
+leveneTest(diversity_16S$Shannon ~ diversity_16S$AD_clusters)       
+shapiro.test(diversity_16S$Shannon[diversity_16S$AD_clusters=="1"]) 
+shapiro.test(diversity_16S$Shannon[diversity_16S$AD_clusters=="2"])
+shapiro.test(diversity_16S$Shannon[diversity_16S$AD_clusters=="3"])
+shapiro.test(diversity_16S$Shannon[diversity_16S$AD_clusters=="4"]) 
+# no, shannon diversity is normal distributed --> thus not possible to make a parametric test here
+```
+
+Non-parametric Kruskal wallis test followed by a Dunns post hoc test
+```{r}
+#NB bacterial shannon diversity not normal distibuted --> non-parametric test
+kruskal.test(diversity_16S$Shannon,diversity_16S$AD_clusters)
+dunnTest(Shannon ~ AD_clusters,
+              data=diversity_16S,
+              method="bh")
+```
+
+
+**Figure for the paper; I. e bactrial Shannon diversity accross community cluster types. Figure 3C**
+```{r}
+diversity_16S$AD_clusters<-factor(diversity_16S$AD_clusters,levels=c("1","2","3","4"))
+diversity_16S$samplesite_points<- if_else(diversity_16S$samplesite=="AD_LS","LS","NLS")
+diversity_16S$samplesite_points<-factor(diversity_16S$samplesite_points,levels=c("NLS","LS"))
+
+p<-ggplot(diversity_16S,aes(y=Shannon,x=AD_clusters,fill=AD_clusters))+
+  geom_boxplot(width=0.6,outlier.shape = NA)+
+  geom_jitter(aes(y=Shannon,x=AD_clusters,shape=samplesite_points),width = 0.1,size=1)+
+  scale_fill_manual(values=color_ad_skin_clusters,name="Community \nclusters")+
+  scale_shape_discrete(name="Skin site")+
+  guides(fill=guide_legend(order=1),shape=guide_legend(order=2))+
+  ylab("Bacterial diversity (Shannon index)")+
+  xlab("AD skin community clusters")+
+  mytheme
+p
+#ggsave(plot=p,filename = "FIle_name",device = "pdf",width = 10,height = 10,units = "cm")
+```
+
+
+
+## Bacterial absoulute abudnances accross cluster types
+
+
+**figure for the paper**
+```{r}
+meta_ad<-data.frame(sample_data(pskin_asv_AD))
+meta_ad$bacteria_quantity_log10<-log10(meta_ad$bacteria_quantity/2)
+
+meta_ad$samplesite_points<- if_else(meta_ad$samplesite=="AD_LS","LS","NLS")
+meta_ad$samplesite_points<-factor(meta_ad$samplesite_points,levels=c("NLS","LS"))
+
+p<-ggplot(meta_ad,aes(y=bacteria_quantity_log10,x=AD_clusters,fill=AD_clusters))+
+  geom_boxplot(width=0.6,outlier.shape = NA)+
+  geom_jitter(aes(y=bacteria_quantity_log10,x=AD_clusters,shape=samplesite_points),width = 0.1,size=1)+
+  scale_fill_manual(values=color_ad_skin_clusters,name="Community \nclusters")+
+  scale_shape_discrete(name="")+
+  guides(fill=guide_legend(order=1),shape=guide_legend(order=2))+
+  ylab("16SrRNA gene copies in 1 µl DNA (log10)")+
+  xlab("AD skin community clusters")+
+  mytheme
+p
+#ggsave(plot=p,filename = "File_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+```
+
+**summary statistcs -log10 tranforemd counts**
+```{r echo=FALSE}
+meta_ad<-data.frame(sample_data(pskin_asv_AD))
+meta_ad$bacteria_quantity_log10<-log10(meta_ad$bacteria_quantity/2)
+
+tapply(meta_ad$bacteria_quantity_log10, meta_ad$AD_clusters, summary)
+```
+
+**summary statistics using the untransformed values:**
+```{r echo=FALSE}
+tapply(meta_ad$bacteria_quantity/2, meta_ad$AD_clusters, summary)
+```
+
+**non-parametric kruskal wallis test**
+```{r}
+kruskal.test(meta_ad$bacteria_quantity_log10 ~ meta_ad$AD_clusters)
+rcompanion::epsilonSquared(x=meta_ad$bacteria_quantity_log10,g=meta_ad$AD_clusters)
+dunnTest(bacteria_quantity_log10 ~AD_clusters,data=meta_ad,method="bh")
+```
+
+
+
+## Differential abundance analysis: difference in Staph species between AD LS and NLS?
+
+### ANCOM-BC DA anslsysis
+
+**prepare data**
+
+```{r}
+# make phylo obejct, with transposed otu matrix
+otu<-as.matrix(otu_table(pskin_spp_AD))
+otu<-t(otu)
+OTU<-otu_table(otu,taxa_are_rows = TRUE)
+
+meta<-as.data.frame(sample_data(pskin_spp_AD))
+meta$samplesite<-factor(meta$samplesite,levels=c("AD_NLS","AD_LS"))
+META<-sample_data(meta)
+
+taxa<-as.matrix(tax_table(pskin_spp_AD))
+TAXA<-tax_table(taxa)
+
+phylo<-phyloseq(OTU,META,TAXA)
+```
+
+**RUN**
+```{r}
+set.seed(42)
+anc<-ancombc(phyloseq = phylo,formula = "samplesite + skin_types", p_adj_method = "fdr",group = "samplesite", lib_cut=4000,zero_cut = 0.75,struc_zero = TRUE)
+```
+
+**initial look at output**
+```{r}
+length(anc$zero_ind)/2                                                          
+length(anc$res$q_val$samplesiteAD_LS[anc$res$q_val$samplesiteAD_LS<0.05])    
+length(anc$res$p_val$samplesiteAD_LS[anc$res$p_val$samplesiteAD_LS<0.05])    
+```
+
+```{r}
+res<-data.frame("asv"=rownames(anc$feature_table),"log_fold_change"=anc$res$beta$samplesiteAD_LS,
+                "se"=anc$res$se$samplesiteAD_LS,"p_val"=anc$res$p_val$samplesiteAD_LS,"q_val"=anc$res$q_val$samplesiteAD_LS)
+taxa2<-data.frame("asv"=rownames(taxa),"Species"=taxa[,1])
+res<-merge(x=res,y=taxa2,by="asv",all.x=TRUE)
+
+res[res$p_val<0.05,]
+```
+
+**plot ANCOn-BC results**
+```{r}
+# prepare df
+res$ci_low<-res$log_fold_change-(1.96*res$se)
+res$ci_up<-res$log_fold_change+(1.96*res$se)
+res$star<-ifelse(res$q_val<.001, "***",ifelse(res$q_val<.01, "**", ifelse(res$q_val<.05, "*", "")))
+res$type<-factor(c("AD NLS - AD LS"))
+
+dat.fig.reduced<-res %>% filter(asv=="ASV1"|asv=="ASV2")
+dat.fig.reduced$Species<-factor(dat.fig.reduced$Genus_Species, levels = sort((dat.fig.reduced$Genus_Species)))
+
+#plot
+p1=ggplot(dat.fig.reduced, aes(x=Species, y=log_fold_change, ymin=ci_low, ymax=ci_up)) + 
+  geom_bar(aes(), stat="identity", width=0.4, position=position_dodge(),fill="#8494b3",color="#8494b3")+
+  geom_errorbar(width=0.2, size=0.25, position=position_dodge(width = 0.4))+
+  geom_abline(slope = 0, intercept = 0, linetype="dashed", alpha=0.5)+
+  labs(x=NULL, y="Log fold change")+coord_flip()+
+  scale_fill_discrete(name=NULL)+
+  scale_x_discrete(limits = rev(levels(dat.fig.reduced$Genus)))+
+  facet_grid(.~type, scales = "free_x")+
+  mytheme+
+  theme(panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        strip.background = element_rect(fill="white"))+
+  geom_text(aes(y=log_fold_change+1*sign(log_fold_change), label=star), 
+            vjust=.7, color="black", position=position_dodge(width = .5))
+p1
+
+#ggsave(plot=p1,filename = "File_name",device = "pdf",width = 12,height = 10,units = "cm")
+```
+
+
+** Boxplots showing relative abudannce of species that was found to be signficantly differential abudant in the two groups**
+```{r}
+#1) relative abudnance
+phylo2<-transform_sample_counts(phylo,function(x) x/sum(x)*100)
+df<-psmelt(phylo2)
+asv_sign<-dat.fig.reduced$asv
+df<-filter(df,OTU %in% asv_sign)
+
+g<-ggplot(df,aes(x=samplesite,y=Abundance))+
+  geom_boxplot(width=0.6)+
+  facet_grid(. ~Genus_Species, scales = "free_x")+
+  ylab("Relative abundance (%)")+
+  mytheme+
+  theme(strip.background = element_rect(fill="white"))
+g
+
+#ggsave(plot=g,filename = "file_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+
+# absolute read counts
+df<-psmelt(phylo)
+asv_sign<-dat.fig.reduced$asv
+df<-filter(df,OTU %in% asv_sign)
+
+g<-ggplot(df,aes(x=samplesite,y=Abundance))+
+  geom_boxplot(width=0.6)+
+  facet_grid(. ~Genus_Species, scales = "free_x")+
+  ylab("Absolute read count")+
+  mytheme+
+  theme(strip.background = element_rect(fill="white"))
+g
+#ggsave(plot=g,filename = "file_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+```
+
+
+### Plot S. aureus/S. epidermidis abudannces witin LS and NLS 
+
+**S. aureus relative abundance within the staphylococcal community**
+```{r}
+pskin_df_aureus<-filter(pskin_df,Genus_Species=="Staphylococcus_aureus")
+
+p<-ggplot(pskin_df_aureus,aes(y=Abundance,x=samplesite,fill=samplesite))+
+  geom_boxplot(width=0.6)+
+  geom_line(aes(x=samplesite,y=Abundance, group = id),color="grey",alpha=0.7) +
+  scale_fill_manual(values=color_ad,name="Skin sites",labels=c("AD LS", "AD NLS"))+
+  scale_x_discrete(breaks=c("AD_LS","AD_NLS"),labels=c("AD LS","AD NLS"))+
+  ylab("Relative abundance of S. aureus \nwithin the Staphylococcal community (%)")+
+  xlab("Skin sites")+
+  mytheme
+p
+#ggsave(plot=p,filename = "File_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+
+#NB use the ANCOM-BC model results for test statics
+```
+
+**S. aureus relative abundance within the bacterial community:**
+```{r}
+pskin_df_aureus<-filter(pskin_df,Genus_Species=="Staphylococcus_aureus")
+
+# calculate the proportional abudnance of S. aureus within the bacterial community by combining aureus proportions (tuf derived)  with Staphylococcus proportions (16S rRNA)
+pskin_df_aureus$sa_abundance_in_bacterial_pop<-((pskin_df_aureus$Abundance/100)*pskin_df_aureus$Staph_proportion)*100
+
+p<-ggplot(pskin_df_aureus,aes(y=sa_abundance_in_bacterial_pop,x=samplesite,fill=samplesite))+
+  geom_boxplot(width=0.6)+
+  geom_line(aes(x=samplesite,y=sa_abundance_in_bacterial_pop, group = id),color="grey",alpha=0.7) +
+  scale_fill_manual(values=color_ad,name="Skin sites",labels=c("AD LS", "AD NLS"))+
+  scale_x_discrete(breaks=c("AD_LS","AD_NLS"),labels=c("AD LS","AD NLS"))+
+  ylab("Relative abundance of S. aureus \nwithin the bacterial community (%)")+
+  xlab("Skin sites")+
+  mytheme
+p
+#ggsave(plot=p,filename = "File_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+
+#Non-parametric paired test:
+aureus_wide2<- pivot_wider(id_cols="id",names_from="samplesite", values_from="sa_abundance_in_bacterial_pop",data=pskin_df_aureus)
+wilcox.test(aureus_wide2$AD_LS,aureus_wide2$AD_NLS,paired=TRUE)
+```
+
+**absolut abudnance of SA, thus combining tuf proportioanl data, 16S proportional data and 16S quantitative data:**
+```{r}
+#estimate aboslute abudnance by combining above pproportion with total bacterial densities i.e. the qPCR data. nb, the qPCR values (variable "bacteria_quantity" is divided by 2, in order to get counts within 1 inestead of 2 µl DNA eluate)
+pskin_df_aureus$absolut_sa_abb<-(pskin_df_aureus$sa_abundance_in_bacterial_pop/100)*(pskin_df_aureus$bacteria_quantity/2)
+# log transform absolute counts
+pskin_df_aureus$absolut_sa_abb_log10<-log10(pskin_df_aureus$absolut_sa_abb+1)
+
+p<-ggplot(pskin_df_aureus,aes(y=absolut_sa_abb_log10,x=samplesite,fill=samplesite))+
+  geom_boxplot(width=0.6)+
+  geom_line(aes(x=samplesite,y=absolut_sa_abb_log10, group = id),color="grey",alpha=0.7) +
+  scale_fill_manual(values=color_ad,name="Skin sites",labels=c("AD LS", "AD NLS"))+
+  scale_x_discrete(breaks=c("AD_LS","AD_NLS"),labels=c("AD LS","AD NLS"))+
+  ylab("Estimated absolut abundance \nof S. aureus (log10)")+
+  xlab("Skin sites")+
+  mytheme
+p
+#ggsave(plot=p,filename = "Filee_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+
+#NB, for stats, see further down
+```
+
+**S. epidermidis relative abundance within the bacterial community:**
+```{r}
+pskin_df_epi<-filter(pskin_df,Genus_Species=="Staphylococcus_epidermidis")
+pskin_df_epi$epi_abundance_in_bacterial_pop<-((pskin_df_epi$Abundance/100)*pskin_df_epi$Staph_proportion)*100
+
+p<-ggplot(pskin_df_epi,aes(y=epi_abundance_in_bacterial_pop,x=samplesite,fill=samplesite))+
+  geom_boxplot(width=0.6)+
+  geom_line(aes(x=samplesite,y=epi_abundance_in_bacterial_pop, group = id),color="grey",alpha=0.7) +
+  scale_fill_manual(values=color_ad,name="Skin sites",labels=c("AD LS", "AD NLS"))+
+  scale_x_discrete(breaks=c("AD_LS","AD_NLS"),labels=c("AD LS","AD NLS"))+
+  ylab("Relative abundance of S. epidermidis \nwithin the bacterial community (%)")+
+  xlab("Skin sites")+
+  mytheme
+p
+#ggsave(plot=p,filename = "file_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+
+#Non-parametric paired test:
+epi_wide<- pivot_wider(id_cols="id",names_from="samplesite", values_from="epi_abundance_in_bacterial_pop",data=pskin_df_epi)
+wilcox.test(epi_wide$AD_LS,epi_wide$AD_NLS,paired=TRUE)
+```
+
+**S. epidermidis absolute abundance**
+```{r}
+pskin_df_epi$absolut_epi_abb<-(pskin_df_epi$epi_abundance_in_bacterial_pop/100)*(pskin_df_epi$bacteria_quantity/2)
+pskin_df_epi$absolut_epi_abb_log10<-log10(pskin_df_epi$absolut_epi_abb+1)
+
+p<-ggplot(pskin_df_epi,aes(y=absolut_epi_abb_log10,x=samplesite,fill=samplesite))+
+  geom_boxplot(width=0.6)+
+  geom_line(aes(x=samplesite,y=absolut_epi_abb_log10, group = id),color="grey",alpha=0.7) +
+  scale_fill_manual(values=color_ad,name="Skin sites",labels=c("AD LS", "AD NLS"))+
+  scale_x_discrete(breaks=c("AD_LS","AD_NLS"),labels=c("AD LS","AD NLS"))+
+  ylab("Estimated absolut abundance \nof S. epidermidis (log10)")+
+  xlab("Skin sites")+
+  mytheme
+p
+#ggsave(plot=p,filename = "File_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+
+#NB, for stats, see below
+```
+
+**test differences in the absolute abundance of top 10 staphylococcal species accross LS and NLS.  And correct for multiple testing using fdr**
+```{r}
+#selecting top 10 taxa
+top10_taxa
+pskin_calc_abs_ab<-pskin_df[pskin_df$Genus_Species %in% top10_taxa,]
+#calculating the reative abundance of staph spp witin bacterial community by combining tuf and 16S data
+pskin_calc_abs_ab$abb_bacterial_pop<-(pskin_calc_abs_ab$Abundance/100)*pskin_calc_abs_ab$Staph_proportion
+#estimating the absolute abundance by combining with qPCR data (divide by 2 in oredr to get value in 1 instead of 2 µl DNA eluate)
+pskin_calc_abs_ab$absolut_abb<-pskin_calc_abs_ab$abb_bacterial_pop*(pskin_calc_abs_ab$bacteria_quantity/2)
+pskin_calc_abs_ab$absolut_abb_log10<-log10(pskin_calc_abs_ab$absolut_abb+1)
+
+
+#make into wide format with paired samples:
+wide_taxa1<- pivot_wider(id_cols="id",names_from="samplesite",values_from="absolut_abb_log10",data=pskin_calc_abs_ab[pskin_calc_abs_ab$Genus_Species %in% top10_taxa[1],])
+wide_taxa2<- pivot_wider(id_cols="id",names_from="samplesite",values_from="absolut_abb_log10",data=pskin_calc_abs_ab[pskin_calc_abs_ab$Genus_Species %in% top10_taxa[2],])
+wide_taxa3<- pivot_wider(id_cols="id",names_from="samplesite",values_from="absolut_abb_log10",data=pskin_calc_abs_ab[pskin_calc_abs_ab$Genus_Species %in% top10_taxa[3],])
+wide_taxa4<- pivot_wider(id_cols="id",names_from="samplesite",values_from="absolut_abb_log10",data=pskin_calc_abs_ab[pskin_calc_abs_ab$Genus_Species %in% top10_taxa[4],])
+wide_taxa5<- pivot_wider(id_cols="id",names_from="samplesite",values_from="absolut_abb_log10",data=pskin_calc_abs_ab[pskin_calc_abs_ab$Genus_Species %in% top10_taxa[5],])
+wide_taxa6<- pivot_wider(id_cols="id",names_from="samplesite",values_from="absolut_abb_log10",data=pskin_calc_abs_ab[pskin_calc_abs_ab$Genus_Species %in% top10_taxa[6],])
+wide_taxa7<- pivot_wider(id_cols="id",names_from="samplesite",values_from="absolut_abb_log10",data=pskin_calc_abs_ab[pskin_calc_abs_ab$Genus_Species %in% top10_taxa[7],])
+wide_taxa8<- pivot_wider(id_cols="id",names_from="samplesite",values_from="absolut_abb_log10",data=pskin_calc_abs_ab[pskin_calc_abs_ab$Genus_Species %in% top10_taxa[8],])
+wide_taxa9<- pivot_wider(id_cols="id",names_from="samplesite",values_from="absolut_abb_log10",data=pskin_calc_abs_ab[pskin_calc_abs_ab$Genus_Species %in% top10_taxa[9],])
+wide_taxa10<- pivot_wider(id_cols="id",names_from="samplesite",values_from="absolut_abb_log10",data=pskin_calc_abs_ab[pskin_calc_abs_ab$Genus_Species %in% top10_taxa[10],])
+
+#paired wilconxon signed rank test:
+test1<-wilcox.test(wide_taxa1$AD_LS,wide_taxa1$AD_NLS,paired=TRUE)
+test2<-wilcox.test(wide_taxa2$AD_LS,wide_taxa2$AD_NLS,paired=TRUE)
+test3<-wilcox.test(wide_taxa3$AD_LS,wide_taxa3$AD_NLS,paired=TRUE)
+test4<-wilcox.test(wide_taxa4$AD_LS,wide_taxa4$AD_NLS,paired=TRUE)
+test5<-wilcox.test(wide_taxa5$AD_LS,wide_taxa5$AD_NLS,paired=TRUE)
+test6<-wilcox.test(wide_taxa6$AD_LS,wide_taxa6$AD_NLS,paired=TRUE)
+test7<-wilcox.test(wide_taxa7$AD_LS,wide_taxa7$AD_NLS,paired=TRUE)
+test8<-wilcox.test(wide_taxa8$AD_LS,wide_taxa8$AD_NLS,paired=TRUE)
+test9<-wilcox.test(wide_taxa9$AD_LS,wide_taxa9$AD_NLS,paired=TRUE)
+test10<-wilcox.test(wide_taxa10$AD_LS,wide_taxa10$AD_NLS,paired=TRUE)
+
+#make df for test results, and make p fdr corrections
+p<-rbind(test1$p.value,test2$p.value,test3$p.value,test4$p.value,test5$p.value,test6$p.value,test7$p.value,test8$p.value,test9$p.value,test10$p.value)
+df_results<-data.frame("taxa"=top10_taxa,"p"=p)
+df_results$adj_p<-p.adjust(df_results$p,method = "BH")
+df_results
+```
+
+
+## AD severity analysis
+
+### Compare patients severity  and community cluster assignment of LS and NLS:
+
+
+**summaries - using SCORAD_groups (mild, moderate, severe)**
+```{r}
+'ls'
+table(sample_data(pskin_spp_AD_percent)$SCORAD_group[sample_data(pskin_spp_AD_percent)$samplesite=="AD_LS"],sample_data(pskin_spp_AD_percent)$AD_clusters[sample_data(pskin_spp_AD_percent)$samplesite=="AD_LS"])
+prop.table(table(sample_data(pskin_spp_AD_percent)$SCORAD_group[sample_data(pskin_spp_AD_percent)$samplesite=="AD_LS"],sample_data(pskin_spp_AD_percent)$AD_clusters[sample_data(pskin_spp_AD_percent)$samplesite=="AD_LS"]),1)
+
+'nls'
+table(sample_data(pskin_spp_AD_percent)$SCORAD_group[sample_data(pskin_spp_AD_percent)$samplesite=="AD_NLS"],sample_data(pskin_spp_AD_percent)$AD_clusters[sample_data(pskin_spp_AD_percent)$samplesite=="AD_NLS"])
+prop.table(table(sample_data(pskin_spp_AD_percent)$SCORAD_group[sample_data(pskin_spp_AD_percent)$samplesite=="AD_NLS"],sample_data(pskin_spp_AD_percent)$AD_clusters[sample_data(pskin_spp_AD_percent)$samplesite=="AD_NLS"]),1)
+```
+
+
+**sumaries - using SCORAD values**
+```{r}
+meta_ad_ls<-subset(meta_ad[meta_ad$samplesite=="AD_LS",])
+meta_ad_nls<-subset(meta_ad[meta_ad$samplesite=="AD_NLS",])
+
+'ls - cst 1'
+summary(meta_ad_ls$SCORAD[meta_ad_ls$AD_clusters == "1"])
+'ls - cst 2'
+summary(meta_ad_ls$SCORAD[meta_ad_ls$AD_clusters == "2"])
+'ls - cst 3'
+summary(meta_ad_ls$SCORAD[meta_ad_ls$AD_clusters == "3"])
+'ls - cst 4'
+summary(meta_ad_ls$SCORAD[meta_ad_ls$AD_clusters == "4"])
+
+'nls - cst 1'
+summary(meta_ad_nls$SCORAD[meta_ad_nls$AD_clusters == "1"])
+'nls - cst 2'
+summary(meta_ad_nls$SCORAD[meta_ad_nls$AD_clusters == "2"])
+'nls - cst 3'
+summary(meta_ad_nls$SCORAD[meta_ad_nls$AD_clusters == "3"])
+'nls - cst 4'
+summary(meta_ad_nls$SCORAD[meta_ad_nls$AD_clusters == "4"])
+```
+
+**boxplots - Figure 4A**
+```{r}
+
+#plitting LS and NLS in two
+samplesite_labels<-c("AD lesional skin","AD nonlesional skin")
+names(samplesite_labels)<-c("AD_LS","AD_NLS")
+
+gg_scorad2<-ggplot(meta_ad,aes(x=AD_clusters,y=SCORAD,fill=AD_clusters))+
+  geom_boxplot(width=0.6,outlier.shape=NA)+
+  geom_jitter(aes(x=AD_clusters,y=SCORAD),width = 0.1,size=1)+
+  ylab("SCORAD values")+
+  xlab("Community clusters")+
+  mytheme+
+  #ggtitle("SCORAD values accross Community clusters")+
+  facet_grid( ~samplesite, scales="free_y", space="free",labeller = labeller(samplesite=samplesite_labels))+
+  theme(strip.text.x = element_text(size = 10))+
+  scale_fill_manual(values = c(color_ad_skin_clusters),name="Community \nclusters")
+gg_scorad2
+
+#ggsave(plot=gg_scorad2,filename = "File_name",device = "pdf",width = 15,height = 10,units = "cm")
+```
+
+
+**statistics**
+
+Check f it is possible to eprform parametric test:
+```{r}
+
+# 1) normal ditrsibution?
+ggplot(meta_ad_ls,aes(x=SCORAD))+
+  geom_histogram()+
+  mytheme+
+  ggtitle("SCORAD values accross CSTs in AD LS samples")+
+  facet_grid(AD_clusters ~., scales="free_y", space="free")+
+  theme(panel.grid.minor = element_blank(), panel.grid.major = element_blank(), panel.background = element_blank())+
+  theme(strip.background =element_rect(fill="white"))
+
+ggplot(meta_ad_nls,aes(x=SCORAD))+
+  geom_histogram()+
+  mytheme+
+  ggtitle("SCORAD values accross CSTs in AD NLS samples")+
+  facet_grid(AD_clusters ~., scales="free_y", space="free")+
+  theme(panel.grid.minor = element_blank(), panel.grid.major = element_blank(), panel.background = element_blank())+
+  theme(strip.background =element_rect(fill="white"))
+
+
+ggplot(meta_ad_ls,aes(x=SCORAD,fill=AD_clusters))+
+  geom_density(alpha=0.6)+
+  mytheme+
+  ggtitle("SCORAD values accross CSTs in AD LS samples")
+
+ggplot(meta_ad_nls,aes(x=SCORAD,fill=AD_clusters))+
+  geom_density(alpha=0.6)+
+  ggtitle("SCORAD values accross CSTs in AD NLS samples")
+
+shapiro.test(meta_ad$SCORAD[meta_ad$AD_clusters=="1"])
+shapiro.test(meta_ad$SCORAD[meta_ad$AD_clusters=="2"])
+shapiro.test(meta_ad$SCORAD[meta_ad$AD_clusters=="3"])
+shapiro.test(meta_ad$SCORAD[meta_ad$AD_clusters=="4"])  
+
+
+#equal variance?
+'ls'
+leveneTest(SCORAD ~ AD_clusters,data=meta_ad_ls)
+'nls'
+leveneTest(SCORAD ~ AD_clusters,data=meta_ad_nls)
+```
+--> Assumptions not okay
+--> make nonparametric test
+
+**kruskal wallis**
+LS
+```{r}
+'ls'
+kruskal.test(meta_ad_ls$SCORAD,meta_ad_ls$AD_clusters)
+dunnTest(SCORAD ~ AD_clusters,
+              data=meta_ad_ls,
+              method="bh")
+
+```
+NLS
+```{r}
+'nls'
+kruskal.test(meta_ad_nls$SCORAD,meta_ad_nls$AD_clusters)
+dunnTest(SCORAD ~ AD_clusters,
+              data=meta_ad_nls,
+              method="bh")
+```
+
+
+
+### Differential abundance anaysis, using the ANCOM-BC modeling
+Is any staphylococcal species more abudannt among severe or mdoerate AD as compared to mild AD ? 
+NB, mild AD = reference group.
+Analysis on LS and NLS seperately. Nut make plot combined
+
+
+**prepare data**
+```{r eval=FALSE, include=FALSE}
+# LS
+pskin_spp_LS<-subset_samples(pskin_spp_AD,samplesite=="AD_LS")
+otu<-as.matrix(otu_table(pskin_spp_LS))
+otu<-t(otu)
+OTU<-otu_table(otu,taxa_are_rows = TRUE)
+
+meta<-as.data.frame(sample_data(pskin_spp_LS))
+META<-sample_data(meta)
+
+taxa_ls<-as.matrix(tax_table(pskin_spp_LS))
+TAXA<-tax_table(taxa_ls)
+
+phylo_ls<-phyloseq(OTU,META,TAXA)
+
+# NLS
+pskin_spp_NLS<-subset_samples(pskin_spp_AD,samplesite=="AD_NLS")
+otu<-as.matrix(otu_table(pskin_spp_NLS))
+otu<-t(otu)
+OTU<-otu_table(otu,taxa_are_rows = TRUE)
+
+meta<-as.data.frame(sample_data(pskin_spp_NLS))
+META<-sample_data(meta)
+
+taxa_nls<-as.matrix(tax_table(pskin_spp_NLS))
+TAXA<-tax_table(taxa_nls)
+
+phylo_nls<-phyloseq(OTU,META,TAXA)
+```
+
+**run**
+```{r}
+set.seed(42)
+anc_ls<-ancombc(phyloseq = phylo_ls,formula = "SCORAD_group", p_adj_method = "fdr",group = "SCORAD_group", lib_cut=4000,zero_cut = 0.75,struc_zero = TRUE)
+anc_nls<-ancombc(phyloseq = phylo_nls,formula = "SCORAD_group", p_adj_method = "fdr",group = "SCORAD_group", lib_cut=4000,zero_cut = 0.75,struc_zero = TRUE)
+```
+
+**signficant differences LS sample between moderate vs milde:**
+```{r}
+res_ls_mod<-data.frame("asv"=rownames(anc_ls$feature_table),"log_fold_change"=anc_ls$res$beta$SCORAD_groupmoderate,
+                "se"=anc_ls$res$se$SCORAD_groupmoderate,"p_val"=anc_ls$res$p_val$SCORAD_groupmoderate,"q_val"=anc_ls$res$q_val$SCORAD_groupmoderate)
+taxa_sub<-data.frame(asv=row.names(taxa_ls),species=data.frame(taxa_ls[,1]))
+res_ls_mod<-merge(x=res_ls_mod,y=taxa_sub,by="asv",all.x = TRUE)
+
+res_ls_mod[res_ls_mod$q_val<0.05,]
+```
+
+**signficant differences NLS sample between moderate vs milde:**
+```{r}
+res_nls_mod<-data.frame("asv"=rownames(anc_nls$feature_table),"log_fold_change"=anc_nls$res$beta$SCORAD_groupmoderate,
+                "se"=anc_nls$res$se$SCORAD_groupmoderate,"p_val"=anc_nls$res$p_val$SCORAD_groupmoderate,"q_val"=anc_nls$res$q_val$SCORAD_groupmoderate)
+taxa_sub<-data.frame(asv=row.names(taxa_nls),species=data.frame(taxa_nls[,1]))
+res_nls_mod<-merge(x=res_nls_mod,y=taxa_sub,by="asv",all.x = TRUE)
+
+res_nls_mod[res_nls_mod$q_val<0.05,]
+res_nls_mod[res_nls_mod$p_val<0.05,]
+```
+
+**significant differences LS between patients with  severe vs mild AD:**
+```{r}
+res_ls_s<-data.frame("asv"=rownames(anc_ls$feature_table),"log_fold_change"=anc_ls$res$beta$SCORAD_groupsevere,
+                "se"=anc_ls$res$se$SCORAD_groupsevere,"p_val"=anc_ls$res$p_val$SCORAD_groupsevere,"q_val"=anc_ls$res$q_val$SCORAD_groupsevere)
+taxa_sub<-data.frame(asv=row.names(taxa_ls),species=data.frame(taxa_ls[,1]))
+res_ls_s<-merge(x=res_ls_s,y=taxa_sub,by="asv",all.x = TRUE)
+
+res_ls_s[res_ls_s$q_val<0.05,]
+```
+
+**significant differences in NLS between patients with  severe vs mild AD:**
+```{r}
+res_nls_s<-data.frame("asv"=rownames(anc_nls$feature_table),"log_fold_change"=anc_nls$res$beta$SCORAD_groupsevere,
+                "se"=anc_nls$res$se$SCORAD_groupsevere,"p_val"=anc_nls$res$p_val$SCORAD_groupsevere,"q_val"=anc_nls$res$q_val$SCORAD_groupsevere)
+taxa_sub<-data.frame(asv=row.names(taxa_nls),species=data.frame(taxa_nls[,1]))
+res_nls_s<-merge(x=res_nls_s,y=taxa_sub,by="asv",all.x = TRUE)
+
+res_nls_s[res_nls_s$q_val<0.05,]
+```
+
+**prepare data for plotting**
+```{r include=FALSE}
+# prepare df
+res_ls_mod$ci_low<-res_ls_mod$log_fold_change-(1.96*res$se)
+res_ls_mod$ci_up<-res_ls_mod$log_fold_change+(1.96*res$se)
+res_ls_mod$type<-factor(c("Mild AD - Moderate AD"))
+res_ls_mod$site<-factor(c("AD LS"))
+
+res_ls_s$ci_low<-res_ls_s$log_fold_change-(1.96*res$se)
+res_ls_s$ci_up<-res_ls_s$log_fold_change+(1.96*res$se)
+res_ls_s$type<-factor(c("Mild AD - Severe AD"))
+res_ls_s$site<-factor(c("AD LS"))
+
+res_nls_mod$ci_low<-res_nls_mod$log_fold_change-(1.96*res$se)
+res_nls_mod$ci_up<-res_nls_mod$log_fold_change+(1.96*res$se)
+res_nls_mod$type<-factor(c("Mild AD - Moderate AD"))
+res_nls_mod$site<-factor(c("AD NLS"))
+
+res_nls_s$ci_low<-res_nls_s$log_fold_change-(1.96*res$se)
+res_nls_s$ci_up<-res_nls_s$log_fold_change+(1.96*res$se)
+res_nls_s$type<-factor(c("Mild AD - Severe AD"))
+res_nls_s$site<-factor(c("AD NLS"))
+
+setdiff(res_nls_mod$asv, res_ls_mod$asv)  # -> thus, no structural zeroes. 
+
+dat.fig=rbind(res_ls_mod,res_ls_s, res_nls_mod,res_nls_s)
+dat.fig$star<-ifelse(dat.fig$q_val<.001, "***",ifelse(dat.fig$q_val<.01, "**", ifelse(dat.fig$q_val<.05, "*", "")))
+
+# make reduced dat.fig df where ASVs with p_val < 0.01 for at least one of the samplesites
+dat.fig.reduced<-dat.fig %>% filter(q_val<0.05)
+asv_keep<-unique(dat.fig.reduced$asv)
+dat.fig.reduced<-subset(dat.fig[dat.fig$asv %in% asv_keep,])
+dat.fig.reduced$asv=factor(dat.fig.reduced$asv, levels = sort(unique(dat.fig.reduced$asv)))
+dat.fig.reduced$Species=factor(dat.fig.reduced$Genus_Species, levels=c("Staphylococcus_lugdunensis","Staphylococcus_hominis","Staphylococcus_capitis","Staphylococcus_aureus"))
+```
+
+**plot, Figure 4B in the paper**
+```{r}
+p1=ggplot(dat.fig.reduced, aes(x=Species, y=log_fold_change, ymin=ci_low, ymax=ci_up, group=site)) + 
+  geom_bar(aes(fill=site), stat="identity", width=0.6, position=position_dodge())+
+  geom_errorbar(width=0.2, size=0.25, position=position_dodge(width = 0.6))+
+  geom_abline(slope = 0, intercept = 0, linetype="dashed", alpha=0.5)+
+  labs(x=NULL, y="Log fold change")+coord_flip()+
+  scale_fill_manual(values = color_ad,name="Skin sites",labels=c("AD LS", "AD NLS"))+
+  scale_x_discrete(breaks=c("Staphylococcus_lugdunensis","Staphylococcus_hominis","Staphylococcus_capitis","Staphylococcus_aureus"),labels=c("S. lugdunensis","S. hominis","S. capitis","S. aureus"))+
+  facet_grid(.~type, scales = "free_x")+
+  mytheme+
+  theme(panel.grid.major = element_blank(),
+        strip.background = element_rect(fill="white"),
+        axis.text.y = element_text(face = "bold",size=10))+
+  geom_text(aes(y=log_fold_change+2.2*sign(log_fold_change), label=star), 
+            vjust=.7, color="black", position=position_dodge(width = .6))+
+  scale_y_continuous(breaks = c(-6,-4,-2,0,2,4,6), limits=c(-7,7))
+
+p1
+#ggsave(plot=p1,filename = "File_name.pdf",device = "pdf",width = 18,height = 10,units = "cm")
+```
+
+
+**plot abudnances (boxplots) of those species find to e significantly differential abudannt between groups**
+```{r}
+#1) relative abudnance
+phylo2<-transform_sample_counts(phylo_ls,function(x) x/sum(x)*100)
+df<-psmelt(phylo2)
+asv_sign<-dat.fig.reduced$asv
+df<-filter(df,OTU %in% asv_sign)
+
+df<-psmelt(pskin_spp_AD_percent)
+asv_sign<-dat.fig.reduced$asv
+df<-filter(df,OTU %in% asv_sign)
+
+g<-ggplot(df,aes(x=SCORAD_group,y=Abundance))+
+  geom_boxplot(width=0.6)+
+  facet_grid(samplesite ~Genus_Species, scales = "free_x")+
+  ylab("Relative abundance within staphylococcal community (%)")+
+  mytheme+
+  theme(strip.background = element_rect(fill="white"))
+g
+ggsave(plot=g,filename = "File_name.pdf",device = "pdf",width = 20,height = 13,units = "cm")
+```
+
+
+
+### Correlation analysis: estimated absolute abudance of species vs SCORAD
+Spearman correlation
+Only for the 10 overall most abudannt species.
+Correct for multiple testing using FDR
+
+**LS**
+```{r}
+#selecting top 10 taxa
+top10_taxa
+pskin_calc_abs_ab<-pskin_df[pskin_df$Genus_Species %in% top10_taxa,]
+#calculating the reative abundance of staph spp witin bacterial community by combining tuf and 16S data
+pskin_calc_abs_ab$abb_bacterial_pop<-(pskin_calc_abs_ab$Abundance/100)*pskin_calc_abs_ab$Staph_proportion
+#estimating the absolute abundance by combining with qPCR data (divide by 2 in oredr to get value in 1 instead of 2 µl DNA eluate)
+pskin_calc_abs_ab$absolut_abb<-pskin_calc_abs_ab$abb_bacterial_pop*(pskin_calc_abs_ab$bacteria_quantity/2)
+pskin_calc_abs_ab$absolut_abb_log10<-log10(pskin_calc_abs_ab$absolut_abb+1)
+
+#make df for LS and NLS. and use only mild and severe patients
+pskin_calc_abs_ab_ls<-filter(pskin_calc_abs_ab,samplesite=="AD_LS")
+pskin_calc_abs_ab_nls<-filter(pskin_calc_abs_ab,samplesite=="AD_NLS")
+
+## ANALYSIS on LS
+pskin_calc_abs_ab_ls_sub<-filter(pskin_calc_abs_ab_ls,Genus_Species %in% top10_taxa[1])
+test1<-cor.test(x=pskin_calc_abs_ab_ls_sub$absolut_abb_log10,y=pskin_calc_abs_ab_ls_sub$SCORAD,method="spearman")
+
+pskin_calc_abs_ab_ls_sub<-filter(pskin_calc_abs_ab_ls,Genus_Species %in% top10_taxa[2])
+test2<-cor.test(x=pskin_calc_abs_ab_ls_sub$absolut_abb_log10,y=pskin_calc_abs_ab_ls_sub$SCORAD,method="spearman")
+
+pskin_calc_abs_ab_ls_sub<-filter(pskin_calc_abs_ab_ls,Genus_Species %in% top10_taxa[3])
+test3<-cor.test(x=pskin_calc_abs_ab_ls_sub$absolut_abb_log10,y=pskin_calc_abs_ab_ls_sub$SCORAD,method="spearman")
+
+pskin_calc_abs_ab_ls_sub<-filter(pskin_calc_abs_ab_ls,Genus_Species %in% top10_taxa[4])
+test4<-cor.test(x=pskin_calc_abs_ab_ls_sub$absolut_abb_log10,y=pskin_calc_abs_ab_ls_sub$SCORAD,method="spearman")
+
+pskin_calc_abs_ab_ls_sub<-filter(pskin_calc_abs_ab_ls,Genus_Species %in% top10_taxa[5])
+test5<-cor.test(x=pskin_calc_abs_ab_ls_sub$absolut_abb_log10,y=pskin_calc_abs_ab_ls_sub$SCORAD,method="spearman")
+
+pskin_calc_abs_ab_ls_sub<-filter(pskin_calc_abs_ab_ls,Genus_Species %in% top10_taxa[6])
+test6<-cor.test(x=pskin_calc_abs_ab_ls_sub$absolut_abb_log10,y=pskin_calc_abs_ab_ls_sub$SCORAD,method="spearman")
+
+pskin_calc_abs_ab_ls_sub<-filter(pskin_calc_abs_ab_ls,Genus_Species %in% top10_taxa[7])
+test7<-cor.test(x=pskin_calc_abs_ab_ls_sub$absolut_abb_log10,y=pskin_calc_abs_ab_ls_sub$SCORAD,method="spearman")
+
+pskin_calc_abs_ab_ls_sub<-filter(pskin_calc_abs_ab_ls,Genus_Species %in% top10_taxa[8])
+test8<-cor.test(x=pskin_calc_abs_ab_ls_sub$absolut_abb_log10,y=pskin_calc_abs_ab_ls_sub$SCORAD,method="spearman")
+
+pskin_calc_abs_ab_ls_sub<-filter(pskin_calc_abs_ab_ls,Genus_Species %in% top10_taxa[9])
+test9<-cor.test(x=pskin_calc_abs_ab_ls_sub$absolut_abb_log10,y=pskin_calc_abs_ab_ls_sub$SCORAD,method="spearman")
+
+pskin_calc_abs_ab_ls_sub<-filter(pskin_calc_abs_ab_ls,Genus_Species %in% top10_taxa[10])
+test10<-cor.test(x=pskin_calc_abs_ab_ls_sub$absolut_abb_log10,y=pskin_calc_abs_ab_ls_sub$SCORAD,method="spearman")
+
+#make df for test results, and make p fdr corrections
+p<-rbind(test1$p.value,test2$p.value,test3$p.value,test4$p.value,test5$p.value,test6$p.value,test7$p.value,test8$p.value,test9$p.value,test10$p.value)
+rho<-rbind(test1$estimate,test2$estimate,test3$estimate,test4$estimate,test5$estimate,test6$estimate,test7$estimate,test8$estimate,test9$estimate,test10$estimate)
+df_results<-data.frame("taxa"=top10_taxa,"p"=p,"rho"=rho)
+df_results$adj_p<-p.adjust(df_results$p,method = "BH")
+df_results_ls<-df_results
+df_results_ls
+```
+**NLS**
+```{r}
+## NLS: 
+pskin_calc_abs_ab_nls_sub<-filter(pskin_calc_abs_ab_nls,Genus_Species %in% top10_taxa[1])
+test1<-cor.test(x=pskin_calc_abs_ab_nls_sub$absolut_abb_log10,y=pskin_calc_abs_ab_nls_sub$SCORAD,method="spearman")
+
+pskin_calc_abs_ab_nls_sub<-filter(pskin_calc_abs_ab_nls,Genus_Species %in% top10_taxa[2])
+test2<-cor.test(x=pskin_calc_abs_ab_nls_sub$absolut_abb_log10,y=pskin_calc_abs_ab_nls_sub$SCORAD,method="spearman")
+
+pskin_calc_abs_ab_nls_sub<-filter(pskin_calc_abs_ab_nls,Genus_Species %in% top10_taxa[3])
+test3<-cor.test(x=pskin_calc_abs_ab_nls_sub$absolut_abb_log10,y=pskin_calc_abs_ab_nls_sub$SCORAD,method="spearman")
+
+pskin_calc_abs_ab_nls_sub<-filter(pskin_calc_abs_ab_nls,Genus_Species %in% top10_taxa[4])
+test4<-cor.test(x=pskin_calc_abs_ab_nls_sub$absolut_abb_log10,y=pskin_calc_abs_ab_nls_sub$SCORAD,method="spearman")
+
+pskin_calc_abs_ab_nls_sub<-filter(pskin_calc_abs_ab_nls,Genus_Species %in% top10_taxa[5])
+test5<-cor.test(x=pskin_calc_abs_ab_nls_sub$absolut_abb_log10,y=pskin_calc_abs_ab_nls_sub$SCORAD,method="spearman")
+
+pskin_calc_abs_ab_nls_sub<-filter(pskin_calc_abs_ab_nls,Genus_Species %in% top10_taxa[6])
+test6<-cor.test(x=pskin_calc_abs_ab_nls_sub$absolut_abb_log10,y=pskin_calc_abs_ab_nls_sub$SCORAD,method="spearman")
+
+pskin_calc_abs_ab_nls_sub<-filter(pskin_calc_abs_ab_nls,Genus_Species %in% top10_taxa[7])
+test7<-cor.test(x=pskin_calc_abs_ab_nls_sub$absolut_abb_log10,y=pskin_calc_abs_ab_nls_sub$SCORAD,method="spearman")
+
+pskin_calc_abs_ab_nls_sub<-filter(pskin_calc_abs_ab_nls,Genus_Species %in% top10_taxa[8])
+test8<-cor.test(x=pskin_calc_abs_ab_nls_sub$absolut_abb_log10,y=pskin_calc_abs_ab_nls_sub$SCORAD,method="spearman")
+
+pskin_calc_abs_ab_nls_sub<-filter(pskin_calc_abs_ab_nls,Genus_Species %in% top10_taxa[9])
+test9<-cor.test(x=pskin_calc_abs_ab_nls_sub$absolut_abb_log10,y=pskin_calc_abs_ab_nls_sub$SCORAD,method="spearman")
+
+pskin_calc_abs_ab_nls_sub<-filter(pskin_calc_abs_ab_nls,Genus_Species %in% top10_taxa[10])
+test10<-cor.test(x=pskin_calc_abs_ab_nls_sub$absolut_abb_log10,y=pskin_calc_abs_ab_nls_sub$SCORAD,method="spearman")
+
+#make df for test results, and make p fdr corrections
+p<-rbind(test1$p.value,test2$p.value,test3$p.value,test4$p.value,test5$p.value,test6$p.value,test7$p.value,test8$p.value,test9$p.value,test10$p.value)
+rho<-rbind(test1$estimate,test2$estimate,test3$estimate,test4$estimate,test5$estimate,test6$estimate,test7$estimate,test8$estimate,test9$estimate,test10$estimate)
+df_results<-data.frame("taxa"=top10_taxa,"p"=p,"rho"=rho)
+df_results$adj_p<-p.adjust(df_results$p,method = "BH")
+df_results_nls<-df_results
+df_results_nls
+```
+
+
+
+**make corealtion plots for the paper suplemental**
+```{r}
+selected_spp<-c("Staphylococcus_aureus","Staphylococcus_capitis","Staphylococcus_hominis","Staphylococcus_lugdunensis")
+pskin_calc_abs_ab_sub<-filter(pskin_calc_abs_ab, Genus_Species %in% selected_spp)
+
+samplesite_labels<-c("AD lesional skin","AD nonlesional skin")
+names(samplesite_labels)<-c("AD_LS","AD_NLS")
+
+p<-ggplot(pskin_calc_abs_ab_sub,aes(x=absolut_abb_log10,y=SCORAD))+
+  geom_jitter()+
+  geom_smooth(method = "lm")+
+  mytheme+
+  xlab("Estimated absolute abundance (log10)")+
+  ylab("SCORAD")+
+  facet_grid(Genus_Species ~ samplesite, labeller = labeller(samplesite=samplesite_labels))
+p
+
+ggsave(plot=p,filename = "File_name.pdf",device = "pdf",width = 15,height = 20,units = "cm")
+```
+
+
+
+## Analysis on Skin pH
+
+NB, as pH was meassured on NLS sites on the volar forearm o ly those samples was included in the analysis:
+
+**subset data**
+```{r}
+meta_ad_volarforearm<-subset(meta_ad[meta_ad$samplesite=="AD_NLS" & meta_ad$samplelocation=="arm",])
+```
+
+### Differences accross community cluster types`?
+
+**plot ph accross clusters; Figure 5A in the paper**
+```{r echo=FALSE}
+nls_labels<-c("AD nonlesional skin")
+names(nls_labels)<-c("AD_NLS")
+
+gg_ph<-ggplot(meta_ad_volarforearm,aes(x=AD_clusters,y=pH,fill=AD_clusters))+
+  geom_boxplot(width=0.6,outlier.shape = NA)+
+  geom_jitter(aes(x=AD_clusters,y=pH),width = 0.1,size=1)+
+  #facet_grid( ~samplesite, scales="free_y", space="free",labeller = labeller(samplesite=samplesite_labels))+
+  #theme(strip.text.x = element_text(size = 10))+
+  ylab("Skin pH")+
+  xlab("Community clusters")+
+  scale_fill_manual(values = c(color_ad_skin_clusters),name="Community \nclusters")+
+  mytheme
+gg_ph
+#ggsave(plot=gg_ph,filename = "File_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+```
+
+**data summaries**
+```{r}
+summary(meta_ad_volarforearm$pH)
+tapply(meta_ad_volarforearm$pH, meta_ad_volarforearm$AD_clusters, summary)
+```
+
+** Check if pH is associated with SCORAD or FLG; visul inspection of plot**
+```{r echo=FALSE}
+#flg
+ggplot(meta_ad_volarforearm,aes(x=FLG_mutation,y=pH))+
+  geom_boxplot()+
+  ylab("pH")+
+  mytheme+
+  theme(panel.grid.minor = element_blank(), panel.grid.major = element_blank(), panel.background = element_blank())+
+  theme(strip.background =element_rect(fill="white"))
+
+#scorad
+g1<-ggplot(meta_ad_volarforearm,aes(x=SCORAD_group,y=pH))+
+  geom_boxplot()+
+  ylab("pH")+
+  mytheme+
+  theme(panel.grid.minor = element_blank(), panel.grid.major = element_blank(), panel.background = element_blank())+
+  theme(strip.background =element_rect(fill="white"))
+g2<-ggplot(meta_ad_volarforearm,aes(x=SCORAD,y=pH))+
+  geom_jitter()
+grid.arrange(g1,g2,nrow=2)
+```
+--> dont include in stat test
+
+
+**Statistics**
+1) Check if assumotion for ANOVA test is okay
+```{r}
+# check variance
+leveneTest(meta_ad_volarforearm$pH ~ meta_ad_volarforearm$AD_clusters)
+#check normality
+tapply(meta_ad_volarforearm$pH, meta_ad_volarforearm$AD_clusters, shapiro.test)
+
+ggplot(meta_ad_volarforearm,aes(x=pH))+
+  geom_density()+
+  mytheme+
+  facet_grid(AD_clusters ~., scales="free_y", space="free")+
+  theme(panel.grid.minor = element_blank(), panel.grid.major = element_blank(), panel.background = element_blank())+
+  theme(strip.background =element_rect(fill="white"))
+```
+--> OK
+
+2) ANOVA test
+```{r}
+aov_ph<-aov(pH ~ AD_clusters,data = meta_ad_volarforearm)
+summary(aov_ph) 
+effectsize::omega_squared(aov_ph)
+effectsize::epsilon_squared(aov_ph)
+
+m_ph<-lm(pH ~ relevel(AD_clusters,ref="3"),data = meta_ad_volarforearm)
+summary(m_ph)
+```
+
+```{r}
+resid_panel(m_ph)
+```
+
+```{r}
+TukeyHSD(aov_ph)
+```
+
+
+### Correaltion analysis; S. aureus abundance vs skin pH
+Is S. aureus abundances correlated with skin pH??
+
+
+**estimated aboslute abundance of S. aureus**
+```{r}
+# plot and stat test on estimated absolute abundace
+pskin_ad_sa<-subset_taxa(pskin_spp_AD_percent,Genus_Species=="Staphylococcus_aureus")
+df_pskin_ad_sa<-psmelt(pskin_ad_sa)
+df_pskin_ad_sa_volarforearm<-subset(df_pskin_ad_sa,samplesite=="AD_NLS" & samplelocation=="arm")
+df_pskin_ad_sa_volarforearm$Abundance_in_total_bacterial_community<-((df_pskin_ad_sa_volarforearm$Abundance/100)*df_pskin_ad_sa_volarforearm$Staph_proportion)*100
+df_pskin_ad_sa_volarforearm$absolute_abb<-(df_pskin_ad_sa_volarforearm$Abundance_in_total_bacterial_community/100)*(df_pskin_ad_sa_volarforearm$bacteria_quantity/2)
+df_pskin_ad_sa_volarforearm$absolute_abb_log10<-log10(df_pskin_ad_sa_volarforearm$absolute_abb+1)
+
+p<-ggplot(df_pskin_ad_sa_volarforearm,aes(y=absolute_abb_log10,x=pH))+
+  geom_jitter()+
+  geom_smooth(method = "lm")+
+  mytheme+
+  ylab("Estimated absolute abundance of S. aureus (log10)")+
+  xlab("skin pH")
+p
+#ggsave(plot=p,filename = "Filename.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+
+cor.test(y=df_pskin_ad_sa_volarforearm$absolute_abb, x=df_pskin_ad_sa_volarforearm$pH,method="spearman")
+```
+
+
+
+
+## Analysis on TEWL meassures
+NB, as TEWL was meassured on NLS sites on the volar forearm - lets only include these samples for the analysis:
+
+**subset data**
+```{r}
+meta_ad_volarforearm<-subset(meta_ad[meta_ad$samplesite=="AD_NLS" & meta_ad$samplelocation=="arm",])
+```
+
+### Differences in TEWL accross CSTs
+
+**plot, figure 5B in paper**
+```{r echo=FALSE}
+gg_ph<-ggplot(meta_ad_volarforearm,aes(x=AD_clusters,y=TEWL,fill=AD_clusters))+
+  geom_boxplot(width=0.6,outlier.shape = NA)+
+  geom_jitter(width=0.1,size=1)+
+  ylab("TEWL")+
+  xlab("Community clusters")+
+  scale_fill_manual(values = c(color_ad_skin_clusters), name=c("Community \nclusters"))+
+  mytheme
+gg_ph
+#ggsave(plot=gg_ph,filename = "File_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+```
+
+
+**summaries**
+```{r}
+tapply(meta_ad_volarforearm$TEWL, meta_ad_volarforearm$AD_clusters, summary)
+```
+
+** Check if TEWL is associated with SCORAD**
+```{r echo=FALSE}
+g1<-ggplot(meta_ad_volarforearm,aes(x=SCORAD_group,y=TEWL))+
+  geom_boxplot()+
+  ylab("TEWL")+
+  mytheme+
+  theme(panel.grid.minor = element_blank(), panel.grid.major = element_blank(), panel.background = element_blank())+
+  theme(strip.background =element_rect(fill="white"))
+g2<-ggplot(meta_ad_volarforearm,aes(x=SCORAD,y=TEWL))+
+  geom_jitter()
+grid.arrange(g1,g2,nrow=2)
+```
+NO, dont seem to be an association here...., not nessecary to include variable in statistics
+
+**statistics**
+Possible to perform ANOVA?
+```{r}
+leveneTest(meta_ad_volarforearm$TEWL ~ meta_ad_volarforearm$AD_clusters)
+tapply(meta_ad_volarforearm$TEWL, meta_ad_volarforearm$AD_clusters, shapiro.test)
+```
+--> No, assumotion not okay
+
+--> make non-parametric test
+```{r}
+kruskal.test(meta_ad_volarforearm$TEWL,meta_ad_volarforearm$AD_clusters)
+dunnTest(TEWL ~ AD_clusters,
+              data=meta_ad_volarforearm,
+              method="bh")
+```
+
+
+### Correlation analysis; S.aureus abudannce vs TEWL
+Is TEWL correlated with S. aures abundance?
+use spearman correlation analysis
+
+
+** The estimated absolut abundance of S. aures**
+```{r}
+#preapre dataframe:
+pskin_ad_sa<-subset_taxa(pskin_spp_AD_percent,Genus_Species=="Staphylococcus_aureus")
+df_pskin_ad_sa<-psmelt(pskin_ad_sa)
+df_pskin_ad_sa_volarforearm<-subset(df_pskin_ad_sa,samplesite=="AD_NLS" & samplelocation=="arm")
+df_pskin_ad_sa_volarforearm$Abundance_in_total_bacterial_community<-((df_pskin_ad_sa_volarforearm$Abundance/100)*df_pskin_ad_sa_volarforearm$Staph_proportion)*100
+df_pskin_ad_sa_volarforearm$absolute_abb<-(df_pskin_ad_sa_volarforearm$Abundance_in_total_bacterial_community/100)*(df_pskin_ad_sa_volarforearm$bacteria_quantity/2)
+df_pskin_ad_sa_volarforearm$absolute_abb_log10<-log10(df_pskin_ad_sa_volarforearm$absolute_abb+1)
+
+p<-ggplot(df_pskin_ad_sa_volarforearm,aes(y=absolute_abb_log10,x=TEWL))+
+  geom_jitter()+
+  geom_smooth(method = "lm")+
+  mytheme+
+  ylab("Estimated absolute abundance of S. aureus (log10)")+
+  xlab("TEWL")
+p
+#ggsave(plot=p,filename = "TEWL_absolut_abundance_cor_analysis_plot.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+
+cor.test(y=df_pskin_ad_sa_volarforearm$absolute_abb, x=df_pskin_ad_sa_volarforearm$TEWL,method="spearman")
+```
+
+**make above analysis, but ondata where one high TEWL oulier is removed**
+```{r}
+#make above analysis, but ondata where one high TEWL oulier is removed
+
+rem<-df_pskin_ad_sa_volarforearm$Sample[df_pskin_ad_sa_volarforearm$TEWL>40]
+df_pskin_ad_sa_volarforearm_reduced<-df_pskin_ad_sa_volarforearm[!df_pskin_ad_sa_volarforearm$Sample %in% rem,]
+
+p<-ggplot(df_pskin_ad_sa_volarforearm_reduced,aes(y=absolute_abb_log10,x=TEWL))+
+  geom_jitter()+
+  geom_smooth(method = "lm")+
+  mytheme+
+  ylab("Estimated absolute abundance of S. aureus (log10)")+
+  xlab("TEWL")
+p
+#ggsave(plot=p,filename = "File_named.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+
+cor.test(y=df_pskin_ad_sa_volarforearm_reduced$absolute_abb, x=df_pskin_ad_sa_volarforearm_reduced$TEWL,method="spearman")
+```
+
+
+## FLG mutations in relation to cluster assignemnt?
+
+**make all missing data as NA**
+```{r}
+# assign all missing data as "NA"
+meta_ad$FLG_mutation2<-ifelse(meta_ad$FLG_mutation=="afvent",NA,meta_ad$FLG_mutation)
+meta_ad_ls$FLG_mutation2<-ifelse(meta_ad_ls$FLG_mutation=="afvent",NA,meta_ad_ls$FLG_mutation)
+meta_ad_nls$FLG_mutation2<-ifelse(meta_ad_nls$FLG_mutation=="afvent",NA,meta_ad_nls$FLG_mutation)
+```
+
+
+**summaries**
+```{r}
+'ls'
+table(meta_ad_ls$FLG_mutation2,meta_ad_ls$AD_clusters)
+prop.table(table(meta_ad_ls$FLG_mutation2,meta_ad_ls$AD_clusters),1)
+prop.table(table(meta_ad_ls$FLG_mutation2,meta_ad_ls$AD_clusters),2)
+
+'nls'
+table(meta_ad_nls$FLG_mutation2,meta_ad_nls$AD_clusters)
+prop.table(table(meta_ad_nls$FLG_mutation2,meta_ad_nls$AD_clusters),1)
+prop.table(table(meta_ad_nls$FLG_mutation2,meta_ad_nls$AD_clusters),2)
+```
+
+**plot**
+```{r}
+p_flg<-ggplot(meta_ad,aes(x=AD_clusters,fill=FLG_mutation2))+
+  geom_bar(position="dodge")+
+  facet_grid(samplesite ~.)
+p_flg
+```
+
+**fishers test**
+```{r}
+fisher.test(meta_ad_ls$FLG_mutation2,meta_ad_ls$AD_clusters)
+fisher.test(meta_ad_nls$FLG_mutation2,meta_ad_nls$AD_clusters)
+```
+
+
+
+# 3) Comparative analysis of AD and healthy skin; Albow crease samples only
+
+**prepare data**
+```{r}
+table(sample_data(pskin)$samplesite,sample_data(pskin)$samplelocation)
+
+#subset samples from antecubital crease
+pskin_ac<-subset_samples(pskin,samplelocation=="antecubital_fossa")
+pskin_ac<-prune_taxa(taxa_sums(pskin_ac) != 0, pskin_ac)
+
+#make data transformations
+pskin_ac_asv_hellinger<-transform_sample_counts(pskin_ac,function(x) sqrt(x / sum(x)))
+pskin_ac_spp<-tax_glom(pskin_ac, "Genus_Species")
+pskin_ac_spp_percent<-transform_sample_counts(pskin_ac_spp,function(x) x/sum(x)*100)
+pskin_ac_spp_hellinger<-transform_sample_counts(pskin_ac_spp,function(x) sqrt(x/sum(x)))
+```
+
+**counts AD LS and NLS samples collected at the antecubital crease:**
+```{r}
+table(sample_data(pskin_ac)$id[sample_data(pskin_ac)$group=="AD"],sample_data(pskin_ac)$samplesite[sample_data(pskin_ac)$group=="AD"])
+length(sample_data(pskin_ac)$id[sample_data(pskin_ac)$group=="AD"])
+```
+Thus, 17 samples from LS and 19 samples from NLS included. 
+In total 36 individual AD patients. Thus, no patients included with two samples!!
+
+
+## Species distributions within Ac samples
+
+**Perform clustering: for visual purpse**
+Thus order samples in barplot based on species similarities, i.e. samples with similar species composition are close to each other in the barplot
+```{r include=FALSE}
+s_jsd_dist <- phyloseq::distance(pskin_ac_spp_hellinger, method = "jsd")
+s_ord <- ordinate(pskin_ac_spp_hellinger, method = "MDS", distance = s_jsd_dist)
+plot(s_ord$values$Eigenvalues)  # look at eigenvaluen in order to determine how many dimentions to include
+x <- s_ord$vectors[,1:3] # ord$vectors er pr??vernes position i ordination space. angiv i [] antal dimensioner man vil have med
+
+pamPCoA = function(x, k) {
+    list(cluster = pam(x[,1:2], k, cluster.only = TRUE))
+}
+```
+
+**make variable with cluster definition in sampledata**
+```{r eval=FALSE, include=FALSE}
+#K_no <- 2 
+K_no <- 3 
+#K_no <- 4
+#K_no <- 5 
+x <- s_ord$vectors[,1:3]
+data.cluster <- pam(x, k=K_no, cluster.only=T)
+clust <- as.factor(pam(x, k=K_no, cluster.only=T))
+
+sample_data(pskin_ac_spp_percent)$clusters <- clust
+sample_data(pskin_ac_spp_hellinger)$clusters <- clust
+sample_data(pskin_ac_asv_hellinger)$clusters <- clust
+sample_data(pskin_ac)$clusters <- clust
+```
+
+
+**prepare data; creation of taxa barplots**
+```{r eval=FALSE, include=FALSE}
+#identify top 10 species in skin samples
+asv<-data.frame(t(otu_table(pskin_ac_spp_percent)))
+taxa<-data.frame(tax_table(pskin_ac_spp_percent)[,1])
+cbind(row.names(asv),row.names(taxa))
+row.names(asv)<-taxa$Genus_Species
+
+asv$sum<-apply(asv, 1, sum)
+asv<-asv[sort.list(asv$sum, decreasing=T),]
+asv$sum
+
+top10_taxa<-row.names(asv)[1:10]
+
+# melt
+pskin_ac_df<-psmelt(pskin_ac_spp_percent)
+
+#defining all Species not in the top10-list as "other"
+pskin_ac_df$Genus_Species<-as.character(pskin_ac_df$Genus_Species)
+pskin_ac_df$Genus_Species[!pskin_ac_df$Genus_Species %in% top10_taxa]<-c("other")
+
+# ordering taxa, so the most abundant have the same color codes as the AD samples
+order_c<-c("Staphylococcus_epidermidis","Staphylococcus_capitis","Staphylococcus_aureus","Staphylococcus_hominis","Staphylococcus_warneri","Staphylococcus_haemolyticus","Staphylococcus_saccharolyticus","Staphylococcus_saprophyticus","Staphylococcus_condimenti","Staphylococcus_cohnii","other")
+pskin_ac_df$Genus_Species<-factor(pskin_ac_df$Genus_Species,levels=order_c)
+
+#ordering samples by samplesite  
+sub<-data.frame(sample_data(pskin_ac_spp))
+sub<-sub[sort.list(sub$samplesite),]
+order<-sub$sample_id
+pskin_ac_df$Sample<-factor(pskin_ac_df$Sample,levels=order)
+```
+
+
+** Barplot; relative abudnance within the bacterial community. Figure 6A**
+
+```{r,fig.width=8,fig.height=6}
+### PREPARE DATA:
+
+#calculate the relative abudnance of staph species in the bacterial community
+pskin_ac_df$Abundance_2<-((pskin_ac_df$Abundance/100)*pskin_ac_df$Staph_proportion)*100
+
+meta_ac<-sample_data(pskin_ac_spp)
+meta_ac$other_bact_proportion<-(1-meta_ac$Staph_proportion)*100
+
+meta_ac_sub<-data.frame("Sample"=meta_ac$sample_id,"Abundance_2"=meta_ac$other_bact_proportion,"Genus_Species"=c("Non_Staphylococcal_species"),"samplesite"=meta_ac$samplesite)
+pskin_ac_df_sub<-pskin_ac_df %>%select(Sample,Abundance_2,Genus_Species,samplesite) 
+pskin_ac_df_sub<-rbind(pskin_ac_df_sub,meta_ac_sub)
+
+#ordering samples, firs by samplesite, then by cluster
+ac_meta<-data.frame(sample_data(pskin_ac_spp_percent))
+ac_meta<-ac_meta[with(ac_meta,order(samplesite,clusters)),]
+order_ac<-ac_meta$sample_id
+
+pskin_ac_df_sub$Sample<-factor(pskin_ac_df_sub$Sample,levels= order_ac)
+
+
+#select 8 most abudannt species to be colored, make sure that the species order is the same as for the AD community cluster figure --> species will then have hte same color codes
+order_c<-c("other","Staphylococcus_epidermidis","Staphylococcus_capitis","Staphylococcus_aureus","Staphylococcus_hominis","Staphylococcus_warneri","Staphylococcus_haemolyticus","Staphylococcus_saccharolyticus","Staphylococcus_cohnii","Staphylococcus_saprophyticus","Staphylococcus_condimenti")
+taxa_view<-c("Non_Staphylococcal_species",order_c[2:9])
+pskin_ac_df_sub$Genus_Species<-as.character(pskin_ac_df_sub$Genus_Species)
+pskin_ac_df_sub$Genus_Species[!pskin_ac_df_sub$Genus_Species %in% taxa_view]<-c("other_Staphylococcal_species")
+o_taxa<-c(taxa_view,"other_Staphylococcal_species")
+pskin_ac_df_sub$Genus_Species<-factor(pskin_ac_df_sub$Genus_Species,levels=o_taxa)
+
+
+### BARPLOT
+
+#labels for barplot
+AC_labels<-c("AD LS","AD NLS","Healthy control skin")
+names(AC_labels)<-c("AD_LS","AD_NLS","Control_skin")
+
+p<-ggplot(pskin_ac_df_sub, aes(x=Sample, y=Abundance_2, fill=Genus_Species))+
+  geom_bar(aes(),stat="identity",position="stack")+
+  mytheme+                       
+  theme(axis.ticks.x=element_blank())+                         
+  theme(strip.text.x = element_text(size=12, face = "bold"))+  
+  theme(axis.title.x = element_blank(),axis.text.x = element_blank())+
+  theme(legend.box.background = element_rect(colour = "black"))+
+  scale_fill_manual(values=color_metro,name="Species")+
+  ylab("Relative abundance of Staphylococcal species \nwithin the bacterial community (%)")+
+  facet_grid(. ~samplesite , scales = "free_x", space="free",labeller = labeller(samplesite=AC_labels))+theme(strip.text.x = element_text(size = 10,face = "bold"))
+p  
+#ggsave(plot=p,filename = "File_name.pdf",device = "pdf",width = 25,height = 10,units = "cm")
+```
+
+
+
+## Compositional differences between samplesites (beta diversity)
+
+**calculate and plot**
+Use species level
+Use hellinger transforemd counts
+```{r echo=FALSE, fig.height=8, fig.width=8}
+b_ord <- ordinate(pskin_ac_spp_hellinger, method = "PCoA", distance = "bray")
+
+ord_plot<-plot_ordination(pskin_ac_spp_hellinger,b_ord, axes=c(1,2),color="samplesite")+   
+  geom_point(size=2)+
+  stat_ellipse(level=0.75)+
+  scale_color_manual(values=c(color_ac))+
+  mytheme
+
+ord_plot2<-plot_ordination(pskin_ac_spp_hellinger,b_ord, axes=c(1,3),color="samplesite")+   
+  geom_point(size=2, alpha=0.07)+
+  stat_ellipse(level=0.75)+
+  scale_color_manual(values=c(color_ac))
+
+ord_plot3<-plot_ordination(pskin_ac_spp_hellinger,b_ord, axes=c(2,3),color="samplesite")+   
+  geom_point(size=2, alpha=0.07)+
+  stat_ellipse(level=0.75)+
+  scale_color_manual(values=c(color_ac))
+
+grid.arrange(ord_plot,ord_plot2,ord_plot3,nrow=2)
+
+#ggsave(plot=ord_plot,filename = "File_name.pdf",device = "pdf",width = 15,height = 10,units = "cm")
+```
+
+
+**Permanova test**
+1) include all three samplesite (LS, NLS and Healthy skin)
+```{r echo=TRUE}
+#m analysis of homogeneity of group dispersions (check if variance within groups are the same)
+dist<-phyloseq::distance(pskin_ac_spp_hellinger, method = "bray")
+
+bd<-betadisper(dist,group=get_variable(pskin_ac_spp_hellinger,"samplesite"))
+bd
+anova(bd)
+```
+--> assumptions is okay!
+
+```{r}
+aa<-adonis(formula=dist~samplesite,data=get_variable(pskin_ac_spp_hellinger),permuations=999)
+aa
+```
+
+
+2) Compare LS and healthy skin samples
+```{r echo=TRUE}
+pskin_ac_spp_hellinger_ls_c<-subset_samples(pskin_ac_spp_hellinger, !samplesite=="AD_NLS")
+dist<-phyloseq::distance(pskin_ac_spp_hellinger_ls_c, method = "bray")
+
+bd<-betadisper(dist,group=get_variable(pskin_ac_spp_hellinger_ls_c,"samplesite"))
+bd
+anova(bd)  # assumotions is okay
+
+aa<-adonis(formula=dist~samplesite,data=get_variable(pskin_ac_spp_hellinger_ls_c),permuations=999)
+aa
+```
+
+
+3) Compare NLS and healthy skin samples
+```{r}
+pskin_ac_spp_hellinger_nls_c<-subset_samples(pskin_ac_spp_hellinger, !samplesite=="AD_LS")
+dist<-phyloseq::distance(pskin_ac_spp_hellinger_nls_c, method = "bray")
+
+bd<-betadisper(dist,group=get_variable(pskin_ac_spp_hellinger_nls_c,"samplesite"))
+bd
+anova(bd)   # dvs assumptions is okay
+
+aa<-adonis(formula=dist~samplesite,data=get_variable(pskin_ac_spp_hellinger_nls_c),permuations=999)
+aa
+```
+
+** PCoA plot, which also includes S, hominis abudnance. Figure 6B**
+Thus include samplesite (color of points) and S hominis abudnance within the bacterial community (size of points)
+```{r}
+#make variabel for hominis abundances within the bacterial community. Thus combine tuf and 16S rRNA data
+pskin_ac_df_hominis<-filter(pskin_ac_df,Genus_Species=="Staphylococcus_hominis")
+pskin_ac_df_hominis$abb_within_bacterial_pop<-((pskin_ac_df_hominis$Abundance/100)*pskin_ac_df_hominis$Staph_proportion)*100
+pskin_ac_df_hominis_sub<-pskin_ac_df_hominis[,c(3:4,44)]
+names(pskin_ac_df_hominis_sub)<-c("hominis_abundance","sample_id","hominis_abundance_within_bacterial_pop")
+
+sample_data_df<-data.frame(sample_data(pskin_ac_spp_hellinger))
+sample_data_df2<-merge(sample_data_df,pskin_ac_df_hominis_sub,by="sample_id",all.x=TRUE)
+row.names(sample_data_df2)<-sample_data_df2$sample_id
+sample_data(pskin_ac_spp_hellinger)<-sample_data_df2
+
+# make ordination
+b_ord <- ordinate(pskin_ac_spp_hellinger, method = "PCoA", distance = "bray")
+
+#plot 
+ord_plot<-plot_ordination(pskin_ac_spp_hellinger,b_ord, axes=c(1,2),color="samplesite")+   
+  geom_point(aes(size=as.numeric(sample_data(pskin_ac_spp_hellinger)$hominis_abundance_within_bacterial_pop)), alpha=0.75)+
+  scale_size_area(max_size =4)+
+  stat_ellipse(aes(),level=0.75)+
+  scale_color_manual(values=c(color_ac),name="Skin sites",labels=c("AD LS","AD NLS","HC"))+
+  labs(size= "S. hominis \nabundance (%)")+
+  mytheme+
+  guides(color=guide_legend(order=1),size=guide_legend(order=2))
+ord_plot
+#ggsave(plot=ord_plot,filename = "File_name.pdf",device = "pdf",width = 13,height = 10,units = "cm")
+```
+
+## Differential abundance analysis - differences between AD skin and healthy skin?
+Use the ANCOM-BC model for this
+use species level.
+Use untransforemd (raw) counts
+group LS and NLS --> AD skin
+
+**prepare data**
+```{r}
+#make varible with Spp information for each ASV
+df_taxa<-data.frame(tax_table(pskin_ac_spp))
+df_taxa$asv<-row.names(df_taxa)
+
+# make phylo obejct, with transposed otu matrix
+otu<-as.matrix(otu_table(pskin_ac_spp))
+otu<-t(otu)
+OTU<-otu_table(otu,taxa_are_rows = TRUE)
+
+meta<-as.data.frame(sample_data(pskin_ac_spp))
+meta$group<-factor(meta$group,levels=c("Control","AD"))
+META<-sample_data(meta)
+
+taxa<-as.matrix(tax_table(pskin_ac_spp))
+TAXA<-tax_table(taxa)
+
+phylo<-phyloseq(OTU,META,TAXA)
+```
+
+**RUN**
+```{r}
+set.seed(42)
+anc<-ancombc(phyloseq = phylo,formula = "group", p_adj_method = "fdr",group = "group", lib_cut=4000,zero_cut = 0.75,struc_zero = TRUE) # group= varibale with two levels: "AD skin" and "healthy skin"
+```
+
+**initial look at output**
+```{r}
+length(anc$zero_ind)/2                                                          
+#using Control skinas reference:
+length(anc$res$q_val$groupAD[anc$res$q_val$groupAD<0.05])   
+length(anc$res$p_val$groupAD[anc$res$p_val$groupAD<0.05])   
+```
+
+**results**
+```{r}
+#using control skin as reference:
+res.ANCOM_BC=res.ANCOM_BC%>%transmute(asv,
+                                      log_fold_change= `beta.groupAD`,
+                                      se = `se.groupAD`,
+                                      ci.lo=`log_fold_change`-(1.96*se),      
+                                      ci.up=`log_fold_change`+(1.96*se), 
+                                      p_val=`p_val.groupAD`, q_val=`q_val.groupAD`)
+
+res.ANCOM_BC=res.ANCOM_BC%>%arrange(p_val)
+res.ANCOM_BC
+```
+
+**plot results**
+```{r,fig.width=6,fig.height=4}
+dat.fig<-res.ANCOM_BC
+
+#insert variables
+dat.fig$type<-factor(c("Control skin -AD skin"))
+dat.fig$asv=factor(dat.fig$asv, levels = sort(unique(dat.fig$asv)))
+dat.fig<-merge(dat.fig,df_taxa,by="asv",all.x = TRUE)
+dat.fig$Genus_Species=factor(dat.fig$Genus_Species, levels = sort(unique(dat.fig$Genus_Species)))
+dat.fig$star<-ifelse(dat.fig$q_val<.001, "***",ifelse(dat.fig$q_val<.01, "**",ifelse(dat.fig$q_val<.05, "*", "")))
+
+# make reduced dat.fig df where ASVs with p_val < 0.05 is include. and NAs is removed
+dat.fig.reduced<-dat.fig %>% filter(p_val<0.05)
+dat.fig.reduced$Genus_Species=factor(dat.fig.reduced$Genus_Species, levels = sort(unique(dat.fig.reduced$Genus_Species)))
+
+# plot results
+p1=ggplot(dat.fig.reduced, aes(x=Genus_Species, y=log_fold_change, ymin=ci.lo, ymax=ci.up)) + 
+  geom_bar(aes(),stat="identity", width=0.4, position=position_dodge(),fill="#8494b3",color="#8494b3")+
+  geom_errorbar(width=0.2, size=0.25, position=position_dodge(width = 0.4))+
+  geom_abline(slope = 0, intercept = 0, linetype="dashed", alpha=0.5)+
+  labs(x=NULL, y="Log fold change")+coord_flip()+
+  #scale_fill_discrete(name=NULL)+
+  scale_x_discrete(limits = rev(levels(dat.fig.reduced$Genus_Species)))+
+  facet_grid(.~type, scales = "free_x")+
+  theme_bw()+
+  theme(panel.grid.major = element_blank(),
+        #panel.grid.minor = element_blank(),
+        strip.background = element_rect(fill="white"))+
+  geom_text(aes(y=log_fold_change+1.5*sign(log_fold_change), label=star), 
+            vjust=.7, color="black", position=position_dodge(width = .5))+
+  scale_y_continuous(breaks = c(-6,-4,-2,0,2,4,6), limits=c(-6.7,6.7))
+p1
+#ggsave(plot=p1,filename = "File_name.pdf",device = "pdf",width = 20,height = 15,units = "cm")
+```
+
+**look at boxplots showing the proportional abudnances og species found to be signficantly differentialy abudaant between skin sites**
+plot the realtive abundances (i.e. within the staphylococcal community) 
+```{r}
+#1) relative abudnance
+phylo2<-transform_sample_counts(phylo,function(x) x/sum(x)*100)
+df<-psmelt(phylo2)
+asv_sign<-dat.fig.reduced$asv
+df<-filter(df,OTU %in% asv_sign)
+
+g<-ggplot(df,aes(x=group,y=Abundance))+
+  geom_boxplot(width=0.6)+
+  facet_grid(. ~Genus_Species, scales = "free_x")+
+  ylab("Relative abundance (%)")+
+  mytheme+
+  theme(strip.background = element_rect(fill="white"))
+g
+#ggsave(plot=g,filename = "File_name.pdf",device = "pdf",width = 20,height = 10,units = "cm")
+```
+
+### Plot the relative abundances of spp find to be signficantly differentially abundant in the ANCOM-BC analysis
+
+**S. hominis**
+Figure 6C and 6D
+```{r}
+# 1) tuf only (proportional abudannce within the staphylococcal community)
+gg<-ggplot(pskin_ac_df[pskin_ac_df$Genus_Species=="Staphylococcus_hominis",],aes(x=group,y=Abundance,fill=group))+
+  geom_boxplot(width=0.6)+
+  mytheme+
+  scale_fill_manual(values = color_group)+
+  ylab("Realtive abundance of S. hominis \n in Staphylococcal species communities (%)")
+gg
+#ggsave(plot=gg,filename = "file_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+
+# 2) tuf *16S (proportional abundance within the bacterial community)
+pskin_ac_df$Abundance_in_total_bacterial_community<-((pskin_ac_df$Abundance/100)*pskin_ac_df$Staph_proportion)*100
+
+pskin_ac_df$samplesite_points<- if_else(pskin_ac_df$samplesite=="AD_LS","LS","NLS")
+pskin_ac_df$samplesite_points<-factor(pskin_ac_df$samplesite_points,levels=c("NLS","LS"))
+
+gg<-ggplot(pskin_ac_df[pskin_ac_df$Genus_Species=="Staphylococcus_hominis",],aes(x=group,y=Abundance_in_total_bacterial_community,fill=group))+
+  geom_boxplot(width=0.6,outlier.shape = NA)+
+  geom_jitter(aes(x=group,y=Abundance_in_total_bacterial_community,shape=samplesite_points),width = 0.1,size=1)+
+  mytheme+
+ scale_fill_manual(values = color_group,name="Skin sites",labels=c("AD skin", "HC skin"))+
+  scale_shape_discrete(name="")+
+  guides(fill=guide_legend(order=1),shape=guide_legend(order=2))+
+  ylab("Estimated proportion of S. hominis \nwithin the bacterial community (%)")+
+  scale_x_discrete(breaks=c("AD","Control"),labels=c("AD skin","HC skin"))+
+  xlab("Skin sites")
+gg
+#ggsave(plot=gg,filename = "file_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+
+# 3) absolute abundance, ie. also qPCR data:
+pskin_ac_df$samplesite_points<- if_else(pskin_ac_df$samplesite=="AD_LS","LS","NLS")
+pskin_ac_df$samplesite_points<-factor(pskin_ac_df$samplesite_points,levels=c("NLS","LS"))
+
+pskin_ac_df$absolute_abb<-(pskin_ac_df$Abundance_in_total_bacterial_community/100)*(pskin_ac_df$bacteria_quantity/2)
+pskin_ac_df$absolute_abb_log10<-log10(pskin_ac_df$absolute_abb+1)
+
+gg<-ggplot(pskin_ac_df[pskin_ac_df$Genus_Species=="Staphylococcus_hominis",],aes(x=group,y=absolute_abb_log10,fill=group))+
+  geom_boxplot(width=0.6,outlier.shape = NA)+
+  geom_jitter(aes(x=group,y=absolute_abb_log10,shape=samplesite_points),width = 0.1,size=1)+
+  mytheme+
+ scale_fill_manual(values = color_group,name="Skin sites",labels=c("AD skin", "HC skin"))+
+  scale_shape_discrete(name="")+
+  guides(fill=guide_legend(order=1),shape=guide_legend(order=2))+
+  ylab("Estimated absolute abundance \nof S. hominis (log10)")+
+  scale_x_discrete(breaks=c("AD","Control"),labels=c("AD skin","HC skin"))+
+  xlab("Skin sites")
+gg
+#ggsave(plot=gg,filename = "file_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+
+```
+
+Summaries:
+```{r}
+'control'
+summary(pskin_ac_df$Abundance[c(pskin_ac_df$Genus_Species=="Staphylococcus_hominis" & pskin_ac_df$samplesite=="Control_skin")])
+'ad skin'
+summary(pskin_ac_df$Abundance[c(pskin_ac_df$Genus_Species=="Staphylococcus_hominis" & pskin_ac_df$group=="AD")])
+'ad_ls'
+summary(pskin_ac_df$Abundance[c(pskin_ac_df$Genus_Species=="Staphylococcus_hominis" & pskin_ac_df$samplesite=="AD_LS")])
+'ad_nls'
+summary(pskin_ac_df$Abundance[c(pskin_ac_df$Genus_Species=="Staphylococcus_hominis" & pskin_ac_df$samplesite=="AD_NLS")])
+```
+
+Statistics:
+```{r}
+## absolute abundances
+
+#Mann whitney U test:
+pskin_ac_df_hominis<-filter(pskin_ac_df,Genus_Species=="Staphylococcus_hominis")
+wilcox.test(absolute_abb~ group, data=pskin_ac_df_hominis,paired=FALSE)     #NB, group = variable with two levels ("AD skin" and "healthy skin")
+
+#median fold change for the Abundance_in_total_bacterial_community
+median(pskin_ac_df_hominis$absolute_abb[pskin_ac_df_hominis$group=="Control"])/median(pskin_ac_df_hominis$absolute_abb[pskin_ac_df_hominis$group=="AD"])
+
+##proportional abundances
+
+#Mann whitney U test:
+pskin_ac_df_hominis<-filter(pskin_ac_df,Genus_Species=="Staphylococcus_hominis")
+wilcox.test(Abundance_in_total_bacterial_community ~ group, data=pskin_ac_df_hominis,paired=FALSE)
+
+median(pskin_ac_df_hominis$Abundance_in_total_bacterial_community[pskin_ac_df_hominis$group=="Control"])/median(pskin_ac_df_hominis$Abundance_in_total_bacterial_community[pskin_ac_df_hominis$group=="AD"])
+```
+
+
+**S. aureus**
+Plot
+```{r}
+# 1) tuf only
+gg<-ggplot(pskin_ac_df[pskin_ac_df$Genus_Species=="Staphylococcus_aureus",],aes(x=group,y=Abundance,fill=group))+
+  geom_boxplot(width=0.6)+
+  mytheme+
+  scale_fill_manual(values = color_group)+
+  ylab("Realtive abundance of S. aureus \n in Staphylococcal species communities (%)")
+gg
+#ggsave(plot=gg,filename = "file_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+
+# 2) tuf *16S
+gg<-ggplot(pskin_ac_df[pskin_ac_df$Genus_Species=="Staphylococcus_aureus",],aes(x=group,y=Abundance_in_total_bacterial_community,fill=group))+
+  geom_boxplot(width=0.6)+
+  mytheme+
+  scale_fill_manual(values = color_group)+
+  ylab("Esimated realtive abundance of S. aureus \nin bacterial species communities (%)")
+gg
+#ggsave(plot=gg,filename = "file_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+```
+
+Summaries
+```{r}
+'control'
+summary(pskin_ac_df$Abundance[c(pskin_ac_df$Genus_Species=="Staphylococcus_aureus" & pskin_ac_df$samplesite=="Control_skin")])
+'ad skin'
+summary(pskin_ac_df$Abundance[c(pskin_ac_df$Genus_Species=="Staphylococcus_aureus" & pskin_ac_df$group=="AD")])
+'ad_ls'
+summary(pskin_ac_df$Abundance[c(pskin_ac_df$Genus_Species=="Staphylococcus_aureus" & pskin_ac_df$samplesite=="AD_LS")])
+'ad_nls'
+summary(pskin_ac_df$Abundance[c(pskin_ac_df$Genus_Species=="Staphylococcus_aureus" & pskin_ac_df$samplesite=="AD_NLS")])
+```
+
+**S. capitis**
+plot
+```{r}
+# 1) tuf only
+gg<-ggplot(pskin_ac_df[pskin_ac_df$Genus_Species=="Staphylococcus_capitis",],aes(x=group,y=Abundance,fill=group))+
+  geom_boxplot(width=0.6)+
+  mytheme+
+  scale_fill_manual(values = color_group)+
+  ylab("Realtive abundance of S. capitis \n in Staphylococcal species communities (%)")
+gg
+#ggsave(plot=gg,filename = "File_name",device = "pdf",width = 10,height = 10,units = "cm")
+
+# 2) tuf *16S
+gg<-ggplot(pskin_ac_df[pskin_ac_df$Genus_Species=="Staphylococcus_capitis",],aes(x=group,y=Abundance_in_total_bacterial_community,fill=group))+
+  geom_boxplot(width=0.6)+
+  mytheme+
+  scale_fill_manual(values = color_group)+
+  ylab("Esimated realtive abundance of S. capitis \nin bacterial species communities (%)")
+gg
+#ggsave(plot=gg,filename = "File_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+```
+
+summary stats:
+```{r}
+'control'
+summary(pskin_ac_df$Abundance[c(pskin_ac_df$Genus_Species=="Staphylococcus_capitis" & pskin_ac_df$samplesite=="Control_skin")])
+'ad skin'
+summary(pskin_ac_df$Abundance[c(pskin_ac_df$Genus_Species=="Staphylococcus_capitis" & pskin_ac_df$group=="AD")])
+'ad_ls'
+summary(pskin_ac_df$Abundance[c(pskin_ac_df$Genus_Species=="Staphylococcus_capitis" & pskin_ac_df$samplesite=="AD_LS")])
+'ad_nls'
+summary(pskin_ac_df$Abundance[c(pskin_ac_df$Genus_Species=="Staphylococcus_capitis" & pskin_ac_df$samplesite=="AD_NLS")])
+```
+
+Statistics:
+```{r}
+kruskal.test(pskin_ac_df$Abundance[pskin_ac_df$Genus_Species=="Staphylococcus_capitis"] ~ pskin_ac_df$samplesite[pskin_ac_df$Genus_Species=="Staphylococcus_capitis"])
+
+wilcox.test(pskin_ac_df$Abundance[pskin_ac_df$Genus_Species=="Staphylococcus_capitis"] ~ pskin_ac_df$group[pskin_ac_df$Genus_Species=="Staphylococcus_capitis"],paired=FALSE)
+```
+
+**S. epidermidis**
+plot:
+```{r}
+# 1) tuf only
+gg<-ggplot(pskin_ac_df[pskin_ac_df$Genus_Species=="Staphylococcus_epidermidis",],aes(x=group,y=Abundance,fill=group))+
+  geom_boxplot(width=0.6)+
+  mytheme+
+  scale_fill_manual(values = color_group)+
+  ylab("Realtive abundance of S. epidermidis \n in Staphylococcal species communities (%)")
+gg
+#ggsave(plot=gg,filename = "file_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+
+# 2) tuf *16S
+gg<-ggplot(pskin_ac_df[pskin_ac_df$Genus_Species=="Staphylococcus_epidermidis",],aes(x=group,y=Abundance_in_total_bacterial_community,fill=group))+
+  geom_boxplot(width=0.6)+
+  mytheme+
+  scale_fill_manual(values = color_group)+
+  ylab("Esimated realtive abundance of S. epidermidis \nin bacterial species communities (%)")
+gg
+#ggsave(plot=gg,filename = "file_name.pdf",device = "pdf",width = 10,height = 10,units = "cm")
+```
+
+summaries
+```{r}
+'control'
+summary(pskin_ac_df$Abundance[c(pskin_ac_df$Genus_Species=="Staphylococcus_epidermidis" & pskin_ac_df$samplesite=="Control_skin")])
+'ad skin'
+summary(pskin_ac_df$Abundance[c(pskin_ac_df$Genus_Species=="Staphylococcus_epidermidis" & pskin_ac_df$group=="AD")])
+'ad_ls'
+summary(pskin_ac_df$Abundance[c(pskin_ac_df$Genus_Species=="Staphylococcus_epidermidis" & pskin_ac_df$samplesite=="AD_LS")])
+'ad_nls'
+summary(pskin_ac_df$Abundance[c(pskin_ac_df$Genus_Species=="Staphylococcus_epidermidis" & pskin_ac_df$samplesite=="AD_NLS")])
+```
+
+**S. cohnii**
+plot
+```{r}
+gg<-ggplot(pskin_ac_df[pskin_ac_df$Genus_Species=="Staphylococcus_cohnii",],aes(x=group,y=Abundance,fill=group))+
+  geom_boxplot(width=0.6)+
+  mytheme+
+  scale_fill_manual(values = color_group)+
+  ylab("S. cohnii relative abundance (%)")
+gg
+#ggsave(plot=gg,filename = "fil_name.pdf",device = "pdf",width = 15,height = 10,units = "cm")
+```
+
+summary stats, i.e. abundace within the staphylococcal community:
+```{r}
+'control'
+summary(pskin_ac_df$Abundance[c(pskin_ac_df$Genus_Species=="Staphylococcus_cohnii" & pskin_ac_df$samplesite=="Control_skin")])
+'ad skin'
+summary(pskin_ac_df$Abundance[c(pskin_ac_df$Genus_Species=="Staphylococcus_cohnii" & pskin_ac_df$group=="AD")])
+'ad_ls'
+summary(pskin_ac_df$Abundance[c(pskin_ac_df$Genus_Species=="Staphylococcus_cohnii" & pskin_ac_df$samplesite=="AD_LS")])
+'ad_nls'
+summary(pskin_ac_df$Abundance[c(pskin_ac_df$Genus_Species=="Staphylococcus_cohnii" & pskin_ac_df$samplesite=="AD_NLS")])
+```
+
+summary stats, i.e. abundace within the bacterial community:
+```{r}
+'control'
+summary(pskin_ac_df$Abundance_in_total_bacterial_community[c(pskin_ac_df$Genus_Species=="Staphylococcus_cohnii" & pskin_ac_df$samplesite=="Control_skin")])
+'ad skin'
+summary(pskin_ac_df$Abundance_in_total_bacterial_community[c(pskin_ac_df$Genus_Species=="Staphylococcus_cohnii" & pskin_ac_df$group=="AD")])
+'ad_ls'
+summary(pskin_ac_df$Abundance_in_total_bacterial_community[c(pskin_ac_df$Genus_Species=="Staphylococcus_cohnii" & pskin_ac_df$samplesite=="AD_LS")])
+'ad_nls'
+summary(pskin_ac_df$Abundance_in_total_bacterial_community[c(pskin_ac_df$Genus_Species=="Staphylococcus_cohnii" & pskin_ac_df$samplesite=="AD_NLS")])
+```
+
+
